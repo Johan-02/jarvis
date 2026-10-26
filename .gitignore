@@ -1,0 +1,14 @@
+.venv/
+.venv-1/
+.env
+__pycache__/
+*.pyc
+grabacion.wav
+# audios generados por edge-tts y por las pruebas de voz: basura para el repo
+*.mp3
+*.wav
+# memoria personal de Edward (nombre y 17 notas): NUNCA se sube jamas
+memoria.json
+memoria.json.bak
+# entorno virtual con el nombre tipico
+venv/

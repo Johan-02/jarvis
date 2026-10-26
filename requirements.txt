@@ -1,0 +1,45 @@
+# Dependencias REALES del proyecto Jarvis (revisadas el 2026-10-19).
+# Antes aqui solo decia Django==4.2.0 y Django no lo importa ni un solo
+# archivo del proyecto. Las versiones con == son las instaladas y leidas
+# con pip freeze, no inventadas.
+
+# --- voz ---
+# grabacion de audio del microfono
+sounddevice==0.5.6
+# reconocimiento de voz (usa el servicio gratis de Google)
+SpeechRecognition==3.17.0
+# texto a voz de Microsoft. >=7.3.1 OBLIGATORIO: entre el 11 y el 13/10/2026
+# Microsoft migro el endpoint v1->v2 y las versiones <=7.2.8 revientan con
+# WSServerHandshakeError 403.
+edge-tts>=7.3.1
+# reproduccion de audio. La 1.3.0 esta ROTA en Windows (su propio codigo hace
+# command.encode('utf-16') y da error MCI261/263), por eso se pinea 1.2.2.
+playsound==1.2.2
+# pywhatkit NO esta aqui a proposito: su setup.py de 2022 usa distutils, que
+# Python elimino, y en Python 3.14 el build revienta con
+# FileNotFoundError: 'requirements.txt'. Es IMPOSIBLE de instalar, y por
+# esa linea el asistente no podia ni arrancar. El comando "reproduce" abre
+# la busqueda de YouTube con webbrowser y urllib.parse.quote, de la stdlib,
+# sin instalar nada.
+
+# --- inteligencia artificial y entorno ---
+# cliente de Anthropic (Claude), la IA del asistente
+anthropic==1.5.0
+# lectura de variables de entorno del archivo .env
+python-dotenv==1.2.3
+
+# --- utilidades ---
+# volumen del microfono y matematicas de audio
+numpy==2.5.3
+# efectos de audio; solo lo usa main/prueba_efecto.py y ademas NECESITA
+# ffmpeg instalado aparte en el sistema para funcionar. Por eso va
+# comentada: el asistente no la necesita para funcionar.
+# pydub
+# voces del sistema; solo lo usa main/voses.py
+pyttsx3==2.99
+
+# --- motor del asistente (FASE E2b) ---
+# cerrar ventanas por WM_CLOSE desde main/motor.py. YA instalada (medido el
+# 2026-10-21: pywin32==312). Es de escritorio, NO de voz ni de IA, y sin ella
+# main/motor.py no importa y el asistente no arranca.
+pywin32==312
