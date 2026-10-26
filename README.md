@@ -27,7 +27,7 @@ instalar nada.
 
 ```bash
 python main/main.py                   # pide el microfono y se queda escuchando
-python -m unittest discover -s tests  # corre la suite: hoy 291 pruebas
+python -m unittest discover -s tests  # corre la suite: hoy 358 pruebas
 ```
 
 Al arrancar, si `memoria.json` aun no tiene nombre, Jarvis lo pregunta una vez
@@ -39,7 +39,7 @@ jarvis", etc.
 Jarvis lee **una sola** variable, desde `main/.env`:
 
 ```
-ANTHROPIC_API_KEY=   # clave de la API de Anthropic (Claude)
+GROQ_API_KEY=   # clave de la API de Groq (se saca en console.groq.com/keys)
 ```
 
 Copia `.env.example` a `main/.env` y rellena la clave. **Nunca commitees el
@@ -61,18 +61,18 @@ PAPELERA/BORRADO: borrar_archivo [DESTRUCTIVA], papelera_ver, papelera_vaciar
   [DESTRUCTIVA]
 BASE: hora_actual
 
-## 🤖 Claude decide: el bucle agente (Fase G)
+## 🤖 Groq decide: el bucle agente (Fase G)
 
-**Con clave**, Jarvis no se limita a reconocer palabras clave: **Claude
+**Con clave**, Jarvis no se limita a reconocer palabras clave: **el modelo
 decide** qué hacer y actúa con las herramientas del motor. El ciclo, en
 lenguaje claro (Fases G2/G3):
 
-1. Claude recibe la frase de Edward **junto con las herramientas del motor**.
+1. El modelo recibe la frase de Edward **junto con las herramientas del motor**.
    Las genera `main/herramientas.py` **a partir de `motor.REGISTRO`**, sin
    ningún catálogo propio: quien agrega una acción al registro obtiene su
    herramienta sola, sin tocar el generador.
-2. Si Claude pide una herramienta, **el motor la ejecuta de verdad** y su
-   resultado se le devuelve como respuesta; Claude **ve el resultado y
+2. Si el modelo pide una herramienta, **el motor la ejecuta de verdad** y su
+   resultado se le devuelve como respuesta; el modelo **ve el resultado y
    sigue** (pide otra herramienta o responde con el texto final, que es lo
    que se le dice a Edward en voz).
 3. **Tope: 5 iteraciones.** Al llegar, Jarvis avisa honestamente que cortó
@@ -96,7 +96,7 @@ Reduce a la mitad (1 de cada 2 píxeles, ancho máximo 1280): una pantalla de
 independiente (.NET la abre). El `tool_result` lleva un bloque `image` con
 `media_type: image/png` en base64. **La imagen SOLO sale cuando el modelo
 decide mirar** (Edward pregunta algo que necesita ver la pantalla); no se
-manda en cada turno, porque el contenido de la pantalla viaja a Anthropic.
+manda en cada turno, porque el contenido de la pantalla viaja a Groq.
 
 **Aprender (Fase H3).** `recordar` agrega una nota a `memoria.json` y
 `olvidar` [DESTRUCTIVA] la quita; `leer_memoria` solo lee. Detalles que
@@ -112,14 +112,33 @@ importan:
   prompt** antes de la llamada siguiente (`motor.CAMBIAN_MEMORIA`): si no,
   Jarvis guardaría la nota y seguiría sin saberla en ese mismo turno.
 
-**Modelo actual: `claude-haiku-5-5`** (constante `MODELO_IA` en `main.py`).
-El haiku-4.5 tenía su retiro garantizado el 15/10/2026 y esa fecha ya pasó;
-el 5.5 es el actual y el más barato. Cambiar de modelo es UNA línea.
+**Modelo actual: `qwen/qwen3.8-27b`**, servido por **Groq** en su endpoint
+compatible con OpenAI (`https://api.groq.com/openai/v1/chat/completions`),
+hablado con `urllib` de la stdlib (constante `MODELO_IA` en `main.py`).
+**Ve la pantalla**: probado con el PNG real de la pantalla de Edward (30.543
+bytes) y el modelo la describió correctamente. Cambiar de modelo es UNA
+línea; el traductor del formato interno al de OpenAI/Groq vive en
+`main/cerebro.py` (clase `cerebro.ClienteGroq`), así el bucle no se toca.
 
-**Sin `ANTHROPIC_API_KEY` (o con la API caída), Jarvis sigue funcionando**:
-cae a **las 41 acciones por palabras clave** de siempre, **sin llamar a la
-IA en ningún punto**. Eso está probado (Fase G3) y hace que el modo offline
-no dependa de red ni de clave.
+### 📉 Límites de la capa gratis de Groq
+
+**No es una limitación del código: es del plan gratis, y está medida.**
+**7.000 tokens de ENTRADA por minuto**, 1.000 peticiones y 200.000 tokens al
+día; al pasarse, Groq responde **HTTP 429** diciendo cuántos segundos
+esperar. Las 41 herramientas pesan **2.635 tokens** y una petición completa
+**2.684**, o sea **~1,3 frases por minuto** sin filtro. Por eso
+`_herramientas_para(texto)` (`main.py`) manda solo la herramienta que hace
+falta: **546 tokens** en vez de 2.684, y **9 de 16** frases típicas quedan
+filtradas. Ante 429/503 Jarvis espera lo que diga la API (tope 20 s) y
+reintenta hasta 2 veces; 401/403/400 no se reintentan. Sin caché: la misma
+petición dos veces se cobra igual. La alternativa más barata es
+`openai/gpt-oss-120b` (**1.351 tokens**) pero **NO ve la pantalla**; y
+`openai/gpt-oss-20b` está descartado porque devuelve JSON roto.
+
+**Sin `GROQ_API_KEY` (o con la API caída), Jarvis sigue funcionando**:
+cae a **27 de las 41 acciones por palabras clave**, **sin llamar a la IA en
+ningún punto**; las otras 14 solo las alcanza la IA. Eso está probado (Fase
+G3) y hace que el modo offline no dependa de red ni de clave.
 
 ## 🛡️ Seguridad: el freno esta DENTRO del motor
 
@@ -163,11 +182,14 @@ no dependa de red ni de clave.
   Descargas por defecto: recorrer `C:\` entero tardo ~59 s medido.
 - **`procesos` limita la salida** a 40 lineas.
 - **`papelera_vaciar` y `borrar_archivo` nunca se probaron en vivo.**
-- **Sin `ANTHROPIC_API_KEY` valida, Jarvis sigue siendo útil**: cae a las
-  **41 acciones por palabras clave** de siempre, **sin llamar a la IA en
-  ningun punto**; lo que no sea una orden conocida va a `consultar_ia`, y
-  ahi SI necesita la clave. El motor de acciones NO la necesita: es
-  stdlib/ctypes (mas pywin32).
+- **Sin `GROQ_API_KEY` válida, Jarvis sigue siendo útil**: cae a **27 de
+  las 41 acciones por palabras clave**, **sin llamar a la IA en ningún
+  punto**; lo que no sea una orden conocida va a `consultar_ia`, y ahí SÍ
+  necesita la clave. Las otras 14 acciones solo las alcanza la IA: `abrir_url`,
+  `abrir_web`, `bateria`, `borrar_archivo`, `brillo`, `descargar`,
+  `escribir_texto`, `leer_memoria`, `mirar_pantalla`, `mover_raton`, `olvidar`,
+  `peso_de`, `recordar` y `volumen_leer`. El motor de acciones NO necesita la
+  clave: es stdlib/ctypes (más pywin32).
 
 ## 🧪 Cómo se prueba
 
@@ -175,7 +197,7 @@ no dependa de red ni de clave.
 python -m unittest discover -s tests
 ```
 
-Hoy son **291 pruebas**. No abren microfono ni hablan: leen el codigo como
+Hoy son **358 pruebas**. No abren microfono ni hablan: leen el codigo como
 texto o como AST, y las del motor usan dobles en vez de tocar el equipo real.
 
 ## 📁 Estructura
@@ -184,10 +206,11 @@ texto o como AST, y las del motor usan dobles en vez de tocar el equipo real.
 jarvis/
 ├── main/             ← main.py (bucle de voz), motor.py (41 acciones),
 │                       herramientas.py (genera las herramientas de la API
-│                       de Claude A PARTIR de REGISTRO, sin duplicar
-│                       catalogos), reconocedor.py (texto -> acciones) y
+│                       del modelo A PARTIR de REGISTRO, sin duplicar
+│                       catalogos), reconocedor.py (texto -> acciones),
+│                       cerebro.py (traduce al formato de Groq) y
 │                       main/.env
-├── tests/            ← las 291 pruebas (unittest)
+├── tests/            ← las 358 pruebas (unittest)
 ├── requirements.txt  ← dependencias reales del proyecto
 ├── .env.example      ← plantilla de la unica variable de entorno
 ├── memoria.json      ← memoria del asistente (nombre y notas)

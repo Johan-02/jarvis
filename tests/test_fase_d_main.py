@@ -118,7 +118,7 @@ class TestB2SinRecursion(unittest.TestCase):
         # en el .env estas 1200 vueltas serian 1200 llamadas reales a la
         # API
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "grabar_hasta_silencio", _grabar_falso), \
                 mock.patch.object(main.sd, "rec",
                                   mock.MagicMock(side_effect=_rec_de_espera)), \

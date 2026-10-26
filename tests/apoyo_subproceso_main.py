@@ -4,8 +4,8 @@
 #   python apoyo_subproceso_main.py <raiz_del_proyecto> [sin_clave] [doble_ia]
 #
 # modos:
-#   sin_clave : no se lee el .env real ni la variable ANTHROPIC_API_KEY
-#   doble_ia  : el doble de anthropic REVIENTA si alguien construye el
+#   sin_clave : no se lee el .env real ni la variable GROQ_API_KEY
+#   doble_ia  : el doble de main.cerebro REVIENTA si alguien construye el
 #               cliente de IA, delata un cliente creado al importar
 #
 # Imprime IMPORT_OK en stdout y sale con codigo 0 solo si importar el modulo
@@ -79,18 +79,30 @@ def _instalar_dobles(modos):
         # modo sin clave: el .env real NO se lee, para no usar la clave de
         # Edward dentro de la prueba, y se borra la variable de entorno
         _doble("dotenv", load_dotenv=lambda *argumentos, **opciones: None)
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("GROQ_API_KEY", None)
 
     if "doble_ia" in modos:
-        # modo doble_ia: doble de anthropic cuyo constructor REVIENTA. Delata
-        # un cliente de IA creado AL IMPORTAR el modulo, que es el defecto
-        # medido por test_no_crea_cliente_ia_al_importar.
-        class _AnthropicQueRevienta:
+        # modo doble_ia: doble de main.cerebro cuyo ClienteGroq REVIENTA al
+        # construirse. Delata un cliente de IA creado AL IMPORTAR el modulo,
+        # que es el defecto medido por TestClienteIAPerezoso.
+        #
+        # POR QUE SE REGISTRA ASI: main/main.py hace `from main import
+        # cerebro` y de ese modulo solo usa `cerebro.ClienteGroq(clave)`.
+        # Ese import respeta sys.modules, asi que si "main.cerebro" ya esta
+        # puesto NO se carga el archivo real y main.py recibe este doble.
+        # El paquete "main" se importa PRIMERO porque un submodulo solo se
+        # puede falsear dentro de un paquete que ya existe; y se puede
+        # importar sin miedo porque main/__init__.py esta vacio (solo
+        # comentarios) y no arrastra nada del asistente.
+        importlib.import_module("main")
+
+        class _ClienteQueRevienta:
             def __init__(self, *argumentos, **opciones):
                 raise AssertionError(
-                    "main/main.py creo el cliente de IA AL IMPORTAR el modulo")
+                    "main/main.py creo el cliente de IA "
+                    "AL IMPORTAR el modulo")
 
-        _doble("anthropic", Anthropic=_AnthropicQueRevienta)
+        _doble("main.cerebro", ClienteGroq=_ClienteQueRevienta)
 
 
 def main():

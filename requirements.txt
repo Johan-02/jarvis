@@ -23,8 +23,9 @@ playsound==1.2.2
 # sin instalar nada.
 
 # --- inteligencia artificial y entorno ---
-# cliente de Anthropic (Claude), la IA del asistente
-anthropic==1.5.0
+# NO hace falta ningun SDK de IA: la IA se llama con urllib de la stdlib,
+# contra el endpoint compatible con OpenAI de Groq. Aqui estuvo
+# anthropic==1.5.0 (SDK de Claude) y YA NO SE USA: se puede desinstalar.
 # lectura de variables de entorno del archivo .env
 python-dotenv==1.2.3
 

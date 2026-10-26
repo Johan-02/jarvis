@@ -6,6 +6,9 @@
 # permite cambiar este parser por un LLM (FASE E) sin tocar el motor.
 
 import dataclasses
+# unicodedata es de la libreria estandar de Python: NO es una dependencia
+# nueva. Se usa solo para quitar las tildes al COMPARAR (ver _sin_acentos)
+import unicodedata
 
 
 # una cosa que el asistente puede hacer, todavia sin ejecutarla. Congelada
@@ -228,6 +231,28 @@ RAICES_BUSQUEDA = ("escritorio", "documentos", "descargas")
 SIGNOS = ".,;:!?¿¡"
 
 
+def _sin_acentos(texto):
+    """quita las tildes (y la enie) de un texto, para COMPARAR nada mas
+
+    El reconocedor de Google transcribe CON TILDES ("Cuánta RAM", "sube el
+    volúmen"), porque asi habla un hispanohablante, y con la tilde puesta
+    esas ordenes no casaban con la tabla y se caian a la IA. Medido en vivo
+    el 2026-10-26 con la voz de Edward.
+
+    Se descompone la letra (NFD) y se tiran las marcas (categoria "Mn"): asi
+    "á" queda "a" y "ñ" queda "n". Es IDEMPOTENTE: aplicarlo dos veces da lo
+    mismo, asi que no importa si un texto ya viene limpio.
+
+    OJO: esto es SOLO para casar palabras. El ARGUMENTO que se le pasa al
+    motor conserva sus tildes originales (ver interpretar): "reproduce
+    canción de José" tiene que buscar "canción de José", no "cancion de
+    Jose", o se busca (o se descarga) otra cosa.
+    """
+    return "".join(
+        letra for letra in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(letra) != "Mn")
+
+
 def _indice_de(palabra, orden):
     """indice de la PRIMERA palabra donde aparece la orden, o -1 si no esta
 
@@ -236,8 +261,20 @@ def _indice_de(palabra, orden):
     varias palabras ("curso de python dalto") tiene que salir seguida.
     Antes de comparar se limpian los signos puntuacion de cada palabra
     (SIGNOS): sin eso "abre gmail?" no reconocia nada y acababa en la IA.
+
+    LAS DOS PARTES SE COMPARAN SIN TILDES:
+      - el lado de la FRASE llega YA normalizado (interpretar le pasa
+        `normalizada`, la lista sin tildes);
+      - el lado de la ORDEN se normaliza AQUI, porque la tabla ORDENES trae
+        tildes a proposito ('búscame', 'pégalo', 'mover el ratón a'): la
+        tabla se deja tal cual, escrita como la dice Edward, y es esta
+        funcion la que la iguala. Asi ninguna de las dos listas puede
+        quedarse atras si manana se anade una orden con tilde.
+    Los indices son los mismos en las dos listas de la frase porque salen
+    del MISMO split: se compara sin tildes, pero se recorta con el indice
+    de la frase original (el argumento conserva sus tildes).
     """
-    trozos = orden.split()
+    trozos = [_sin_acentos(trozo) for trozo in orden.split()]
     ancho = len(trozos)
     limpias = [palabra_i.strip(SIGNOS) for palabra_i in palabra]
     for indice in range(len(limpias) - ancho + 1):
@@ -316,6 +353,10 @@ def interpretar(texto):
       - una sola frase dispara UNA sola accion; si la frase trae varias
         ordenes, manda la PRIMERA mencionada, que es la que el usuario dijo
         antes (y a igual indice de inicio, la PRIMERA de la tabla ORDENES);
+      - las TILDES no cuentan para casar la orden: se compara sin tildes
+        ("Cuánta RAM" vale igual que "cuanta ram"), porque Google transcribe
+        como se habla. El ARGUMENTO, en cambio, viaja con las tildes que
+        dijo el usuario (ver _sin_acentos y las dos listas mas abajo);
       - el argumento de las ordenes con accion None (ORDENES_LIBRES) es lo
         que viene DETRAS de la orden, sin contarla a ella ni nada anterior;
         si no hay nada detras, la orden no dispara y se devuelve la IA
@@ -326,12 +367,21 @@ def interpretar(texto):
         a la IA.
     """
     texto = texto.lower()
+    # DOS listas con el MISMO split, asi que los indices coinciden:
+    #   - `palabra`: la frase en minusculas y CON SUS TILDES. De aqui sale el
+    #     ARGUMENTO (`resto`): "reproduce canción de José" tiene que buscar
+    #     "canción de José" con tildes, o el motor busca (o descarga) otra
+    #     cosa. Es la unica que se usa para recortar texto;
+    #   - `normalizada`: la MISMA frase sin tildes, y SOLO para casar las
+    #     ordenes. Google transcribe con tildes porque asi se habla, y sin
+    #     esta lista "Cuánta RAM" y "sube el volúmen" se iban a la IA.
     palabra = texto.split()
+    normalizada = [_sin_acentos(trozo) for trozo in palabra]
 
     # (indice donde empieza la orden en la frase, accion) de la mejor orden
     mejor = None
     for orden, accion in ORDENES:
-        indice = _indice_de(palabra, orden)
+        indice = _indice_de(normalizada, orden)
         if indice < 0:
             continue
         if accion is None:
@@ -339,6 +389,9 @@ def interpretar(texto):
             if libre is None:
                 continue
             ancho = len(orden.split())
+            # el argumento sale de `palabra` (ORIGINAL, con tildes), recortado
+            # con el indice que encontro la lista normalizada: el mismo split
+            # para las dos, asi que la posicion es la misma
             resto = " ".join(palabra[indice + ancho:])
             if not resto:
                 # sin argumento detras no hay orden: no se adivina nada

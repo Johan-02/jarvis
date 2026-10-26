@@ -976,8 +976,8 @@ def capturar_pantalla(destino="escritorio"):
 
 # ---------------------------------------------------------------------------
 # FASE H2: MIRAR LA PANTALLA. El motor captura, REDUCE y deja un PNG en la
-# carpeta temporal; NO sabe que existe Anthropic. Quien convierte esa ruta en
-# un bloque de imagen y la manda al modelo es main.py.
+# carpeta temporal; NO sabe que existe el proveedor de IA. Quien convierte esa
+# ruta en un bloque de imagen y la manda al modelo es main.py.
 #
 # POR QUE PNG EN PYTHON PURO (zlib + struct) Y NO POWERSHELL + System.Drawing:
 #   1. la captura ya esta EN MEMORIA como BMP (_bmp_de_pantalla), asi que
@@ -1003,7 +1003,7 @@ def capturar_pantalla(destino="escritorio"):
 # los numeros y las letras pequenas, y una captura ilegible no sirve de nada.
 _ANCHO_MAXIMO_PANTALLA = 1280
 
-# tope de la API de Anthropic: 5 MB por imagen. El PNG se comprueba ANTES de
+# tope del proveedor de IA (Groq): 5 MB por imagen. El PNG se comprueba ANTES de
 # devolver la ruta; uno mas grande se rechaza aqui con su motivo, en vez de
 # mandarlo para que la API lo rechace con un 400 y el turno se pierda.
 _TOPE_IMAGEN = 5 * 1024 * 1024
@@ -1121,7 +1121,7 @@ def mirar_pantalla():
     convierte a PNG, reduce a _ANCHO_MAXIMO_PANTALLA y escribe un archivo
     NUEVO en el temp del sistema. No borra, no mueve y no toca nada de lo que
     hay en pantalla. Devuelve la RUTA del PNG en `detalle`; el motor sigue
-    devolviendo TEXTO y no sabe que existe la API de Anthropic.
+    devolviendo TEXTO y no sabe que existe el proveedor de IA.
 
     PRIVACIDAD (decision escrita aqui a proposito): esta accion es la UNICA
     puerta por la que una captura de la pantalla puede viajar a la API. La
@@ -1129,7 +1129,7 @@ def mirar_pantalla():
     cuando Edward pregunta algo que necesita ver la pantalla. NO forma parte
     del contexto automatico ni se manda en cada turno: mandar la pantalla
     significa que TODO su contenido (correos, chats, claves escritas) viaja a
-    Anthropic, y por eso es una herramienta explicita y no un anexo fijo.
+    Groq, y por eso es una herramienta explicita y no un anexo fijo.
     """
     fallo, bmp = _bmp_de_pantalla()
     if fallo is not None:

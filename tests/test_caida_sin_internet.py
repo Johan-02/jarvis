@@ -226,7 +226,7 @@ class TestProcesarOrdenNoMuereSinInternet(unittest.TestCase):
         # el resto del flujo va doblado: microfono, wav y voz. Nunca hay red
         # ni audio real. La espera de 6 s no se alcanza porque el
         # reconocimiento revienta antes; aun asi se dobla el reloj por si
-        with mock.patch.object(main, "anthropic_api_key", None), \
+        with mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(
                     main, "grabar_hasta_silencio",
                     mock.MagicMock(return_value=np.zeros(10, dtype="int16"))), \
@@ -281,7 +281,7 @@ class TestProcesarOrdenNoMuereSinInternet(unittest.TestCase):
         consola = io.StringIO()
 
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "atender", atender), \
                 mock.patch.object(
                     main, "grabar_hasta_silencio",

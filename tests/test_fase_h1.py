@@ -113,7 +113,7 @@ class TestMemoriaEntreTurnos(unittest.TestCase):
             _respuesta([_texto("Claro, señor.")], "end_turn"),
             _respuesta([_texto("La luz queda apagada.")], "end_turn"),
         ])
-        with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+        with mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)), \
                 mock.patch.object(main, "hablar", mock.MagicMock()):
@@ -176,7 +176,7 @@ class TestTopeDelHistorial(unittest.TestCase):
         """
         main = self.main
         cliente = _cliente_continuo()
-        with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+        with mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)):
             for numero in range(1, 101):
@@ -230,7 +230,7 @@ class TestEstructuraValidaParaLaApi(unittest.TestCase):
                        "tool_use"),
             _respuesta([_texto("Siguen siendo las 14:30.")], "end_turn"),
         ])
-        with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+        with mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)), \
                 mock.patch.object(main, "hablar", mock.MagicMock()), \
@@ -360,7 +360,7 @@ class TestSeLimpiaAlEmpezarSesion(unittest.TestCase):
         # espera Jarvis se duerme YA y la vuelta termina sola
         reloj.time.side_effect = [0.0, 100.0]
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "atender",
                                   mock.MagicMock(return_value="")), \
                 mock.patch.object(
@@ -380,7 +380,7 @@ class TestSeLimpiaAlEmpezarSesion(unittest.TestCase):
 
 
 class TestSinClaveNoUsaNiCuesta(unittest.TestCase):
-    """sin ANTHROPIC_API_KEY nada cambia: interpretar() y cero tokens"""
+    """sin GROQ_API_KEY nada cambia: interpretar() y cero tokens"""
 
     def setUp(self):
         self.main = _main()
@@ -399,7 +399,7 @@ class TestSinClaveNoUsaNiCuesta(unittest.TestCase):
         _sembrar_historial(main)
         antes = list(main.HISTORIAL_SESION)
         cliente = mock.MagicMock()
-        with mock.patch.object(main, "anthropic_api_key", None), \
+        with mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "_obtener_cliente_ia", cliente), \
                 mock.patch.object(main, "hablar", mock.MagicMock()), \
                 mock.patch.object(main.motor, "ejecutar",
@@ -454,7 +454,7 @@ class TestFlujoDeProcesarOrden(unittest.TestCase):
         reloj.time.side_effect = [0.0, 1.0, 0.0, 7.0]
         consola = io.StringIO()
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+                mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)), \
                 mock.patch.object(

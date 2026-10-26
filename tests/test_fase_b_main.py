@@ -37,18 +37,20 @@ RUTA_MAIN = RAIZ / "main" / "main.py"
 RUTA_MEMORIA = RAIZ / "memoria.json"
 RUTA_APOYO = RAIZ / "tests" / "apoyo_subproceso_main.py"
 
-# timeout de los subprocesos que importan main.main. Medido en esta maquina:
-# la peor marca fue 21.7 s (import con la caché fria; solo `import anthropic`
-# cuesta 13.6 s). 45 s es mas del doble de esa peor marca. El corte NO es la
-# medida del bug B8: que el arranque este bajo el guard se comprueba por AST
-# (instantaneo e inmune a la velocidad de la maquina, fundamento 28); aqui el
-# corte solo informa que el modulo no termino, con la salida PARCIAL real.
+# timeout de los subprocesos que importan main.main. Medido en esta maquina
+# con la caché fria, 3 veces: 1.97 s / 1.86 s / 1.73 s, o sea la peor marca
+# son 2.0 s (desde la migracion a Groq el modulo ya NO importa `anthropic`).
+# 45 s es mas de 20 veces esa peor marca y se queda por prudencia, no porque
+# el import se acerque. El corte NO es la medida del bug B8: que el arranque
+# este bajo el guard se comprueba por AST (instantaneo e inmune a la
+# velocidad de la maquina, fundamento 28); aqui el corte solo informa que el
+# modulo no termino, con la salida PARCIAL real.
 TIEMPO_SUBPROCESO = 45
 
 # librerias pip que importa main/main.py: si faltan en la maquina NO es el
 # defecto que miden estas pruebas, asi que el subproceso las tolera
 LIBRERIAS_EXTERNAS = (
-    "anthropic", "dotenv", "edge_tts", "numpy", "playsound",
+    "dotenv", "edge_tts", "numpy", "playsound",
     "pywhatkit", "sounddevice", "speech_recognition",
 )
 
@@ -341,8 +343,8 @@ class TestB8ImportaSinMicrofono(unittest.TestCase):
         Es la medida DIRECTA del bug: carga de memoria, peticion de nombre y
         bucle_principal tienen que estar dentro de if __name__ == "__main__":.
         Por AST es instantaneo e inmune a la velocidad de la maquina
-        (fundamento 28): no importa cuantos segundos tarde el import de
-        anthropic, esta prueba no mira el reloj.
+        (fundamento 28): no importa cuantos segundos tarde el import del
+        modulo, esta prueba no mira el reloj.
         """
         fuera = _arranque_fuera_del_guard(_arbol(), ARRANQUE_MAIN)
         self.assertEqual(
@@ -366,12 +368,16 @@ class TestB8ImportaSinMicrofono(unittest.TestCase):
           (b) AUN ASI se tolera el ModuleNotFoundError de esas mismas
               librerias (LIBRERIAS_EXTERNAS): falta de libreria NO es el bug;
 
-        POR QUE 45 s Y NO 10: medido en esta maquina, importar el modulo en
-        frio tardo hasta 21.7 s (de los cuales 13.6 s son `import anthropic`
-        solo). Con 10 s la prueba fallaba por la VELOCIDAD del disco, no por
-        el bug: eso era una bomba de relojeria (fundamento 28). Si aun asi
-        no termina en 45 s, el mensaje dice DONDE se quedo (marcador
-        IMPORTANDO vs IMPORT_OK) y NO acusa al guard, que se mide aparte.
+        POR QUE 45 s Y NO 10: medido en esta maquina con la caché fria (3
+        veces), importar el modulo hoy tarda 1.97 / 1.86 / 1.73 s: la peor
+        marca son 2.0 s. Antes el modulo importaba `anthropic` y la marca
+        vieja era 21.7 s; con 10 s de corte la prueba fallaba por la
+        VELOCIDAD del disco, no por el bug: eso era una bomba de relojeria
+        (fundamento 28). El corte se queda en 45 s por PRUDENCIA (mas de 20
+        veces la peor marca: maquina lenta, antivirus, caché frio), no
+        porque el import se acerque. Si aun asi no termina en 45 s, el
+        mensaje dice DONDE se quedo (marcador IMPORTANDO vs IMPORT_OK) y NO
+        acusa al guard, que se mide aparte.
         """
         codigo, salida, error = _importar_en_subproceso()
 
@@ -454,22 +460,25 @@ class TestB3Interrupcion(unittest.TestCase):
 
 
 class TestClienteIAPerezoso(unittest.TestCase):
-    """el cliente de Anthropic no debe crearse al importar el modulo"""
+    """el cliente de IA de cerebro.py no debe crearse al importar el modulo"""
 
     def test_no_crea_cliente_ia_al_importar(self):
         """importar main.main no puede construir el cliente de la IA
 
         COMO SE MIDE: el apoyo de subproceso acepta el modo "doble_ia", que
-        instala un doble de anthropic cuyo constructor REVIENTA. Si el
-        modulo construye el cliente al importar (como hacia la linea 49),
-        el subproceso muere y no imprime IMPORT_OK.
+        registra en sys.modules un doble de main.cerebro cuyo
+        ClienteGroq REVIENTA al construirse. main/main.py hace
+        `from main import cerebro` y de ahi solo usa
+        `cerebro.ClienteGroq(clave_ia)`, asi que con el doble puesto
+        cualquier creacion del cliente -al importar o al ejecutar el cuerpo
+        del modulo- mata el subproceso y no se imprime IMPORT_OK.
 
-        POR QUE NO BASTA "importar con la clave en None" (lo que pedia la
-        tarea): en esta maquina anthropic 1.5.0 NO valida la clave cuando
-        se construye el cliente, ni siquiera con "banana". `Anthropic
-        (api_key=None)` tampoco revienta. Asi que una prueba que solo
-        importara sin clave PASARIA TAMBIEN con el defecto presente y no
-        delataria nada. El doble que revienta si es una medida del bug.
+        POR QUE UN DOBLE QUE REVIENTA Y NO "importar sin la clave": en esta
+        maquina ClienteGroq NO valida la clave al construirse (no hace red ni
+        con "banana"; solo falla cuando se le manda un mensaje). Una prueba
+        que se limitara a importar sin clave PASARIA TAMBIEN con el defecto
+        puesto y no delataria nada. El constructor que revienta si es medida
+        del bug.
         """
         codigo, salida, error = _importar_en_subproceso(modos=("doble_ia",))
 
@@ -794,7 +803,7 @@ class TestB1Hora(unittest.TestCase):
         with mock.patch.object(main, "datetime", reloj), \
                 mock.patch.object(main.motor, "datetime", reloj), \
                 mock.patch.object(main, "time", reloj_de_espera), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(
                     main, "grabar_hasta_silencio",
                     mock.MagicMock(return_value=np.zeros(10, dtype="int16"))), \

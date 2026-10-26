@@ -1,4 +1,4 @@
-"""generador de las herramientas de la API de Anthropic (FASE G1).
+"""generador de las herramientas de la API del modelo (FASE G1).
 
 TODA la informacion sale de motor.REGISTRO y de la firma de sus
 funciones: este modulo NO tiene ningun catalogo propio. Quien agregue una

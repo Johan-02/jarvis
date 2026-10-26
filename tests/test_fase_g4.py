@@ -92,7 +92,7 @@ def _correr_bucle(main, reconocedor=None, grabar=None, **kwargs):
         reconocedor = mock.MagicMock()
     if grabar is None:
         grabar = mock.MagicMock()
-    with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+    with mock.patch.object(main, "clave_ia", "clave-falsa"), \
             mock.patch.object(main, "_obtener_cliente_ia",
                               mock.MagicMock(return_value=cliente)), \
             mock.patch.object(main, "hablar", voz), \

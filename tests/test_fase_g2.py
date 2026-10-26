@@ -39,6 +39,7 @@ try:
 except ImportError:  # el descubridor pone tests/ en el sys.path
     from test_fase_b_main import _main
 
+from main import herramientas
 from main import motor
 from main.reconocedor import Accion
 
@@ -136,10 +137,20 @@ class TestBucleConHerramientas(unittest.TestCase):
 
         primer_llamado = cliente.messages.create.call_args_list[0].kwargs
         nombres = [h["name"] for h in primer_llamado["tools"]]
+        # DESDE 2026-10-26 la frase "que hora es" NO manda las 41: manda solo
+        # la suya (_herramientas_para). Con las 41 el catalogo cuesta 2.635
+        # tokens y la capa gratis de Groq aguanta 1,3 frases por minuto; con
+        # una sola, 546. Se comprueba el nombre exacto y que la definicion sea
+        # la MISMA del catalogo, no una inventada por el filtro.
         self.assertEqual(
-            nombres, sorted(motor.REGISTRO),
-            "la primera llamada no llevo TODAS las herramientas del "
-            "REGISTRO: %s" % (nombres,))
+            nombres, ["hora_actual"],
+            "la frase pide UNA sola orden y hay que mandar SOLO su "
+            "herramienta: %s" % (nombres,))
+        catalogo = {d["name"]: d for d in herramientas.herramientas()}
+        self.assertEqual(
+            primer_llamado["tools"][0], catalogo["hora_actual"],
+            "la definicion mandada no es la del catalogo: %r"
+            % (primer_llamado["tools"][0],))
 
         tool_result = _ultimo_tool_result(cliente)
         self.assertEqual(
@@ -401,7 +412,7 @@ class TestSinClaveSigueFuncionando(unittest.TestCase):
         for clave in (None, ""):
             with self.subTest(clave=clave):
                 cliente = mock.MagicMock()
-                with mock.patch.object(main, "anthropic_api_key", clave), \
+                with mock.patch.object(main, "clave_ia", clave), \
                         mock.patch.object(main, "_obtener_cliente_ia",
                                           cliente), \
                         mock.patch.object(main, "hablar",
@@ -436,7 +447,7 @@ class TestSinClaveSigueFuncionando(unittest.TestCase):
         cliente = _cliente(RuntimeError("401 Unauthorized"))
         consola = io.StringIO()
 
-        with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+        with mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)), \
                 mock.patch.object(main, "hablar", mock.MagicMock()), \
@@ -475,7 +486,7 @@ class TestSinClaveSigueFuncionando(unittest.TestCase):
         cliente = mock.MagicMock()
         consola = io.StringIO()
 
-        with mock.patch.object(main, "anthropic_api_key", None), \
+        with mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "_obtener_cliente_ia", cliente), \
                 mock.patch.object(main, "hablar", mock.MagicMock()), \
                 mock.patch("sys.stdout", consola):
@@ -544,14 +555,15 @@ class TestPromptVerdadero(unittest.TestCase):
             "al reescribir el prompt se dejo fuera una nota de la memoria")
 
     def test_el_modelo_es_el_actual(self):
-        """MODELO_IA es claude-haiku-5-5 y preguntar_a_ia lo usa
+        """MODELO_IA es el modelo de Groq de hoy y preguntar_a_ia lo usa
 
-        claude-haiku-4-5 tenia retiro garantizado el 15/10/2026 y esa fecha
-        ya paso: queda la constante nombrada con el actual y mas barato.
+        Jarvis dejo de hablar con Anthropic: el proveedor es Groq (ver
+        main/cerebro.py) y la constante nombrada lleva el modelo que se usa
+        hoy, medido con la clave real.
         """
         main = self.main
         self.assertEqual(
-            main.MODELO_IA, "claude-haiku-5-5",
+            main.MODELO_IA, "qwen/qwen3.8-27b",
             "MODELO_IA cambio: %r" % (main.MODELO_IA,))
         cliente = _cliente([_respuesta([_texto("ok")], "end_turn")])
 
@@ -561,7 +573,7 @@ class TestPromptVerdadero(unittest.TestCase):
 
         modelo_llamado = cliente.messages.create.call_args.kwargs["model"]
         self.assertEqual(
-            modelo_llamado, "claude-haiku-5-5",
+            modelo_llamado, "qwen/qwen3.8-27b",
             "preguntar_a_ia sigue usando el modelo viejo: %r"
             % (modelo_llamado,))
 

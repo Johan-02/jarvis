@@ -5,7 +5,6 @@ import wave # importamos la libreria de manejo de archivos de audio
 import speech_recognition as sr # importamos la libreria de reconocimiento de voz
 import os # importamos la libreria de manejo de archivos y directorios
 from dotenv import load_dotenv # importamos la libreria de manejo de variables de entorno
-from anthropic import Anthropic # importamos la libreria de Anthropic para interactuar con la API de IA
 import webbrowser # importamos la libreria de manejo de navegadores web
 import edge_tts # importamos la libreria de texto a voz de Microsoft
 import asyncio # importamos la libreria de manejo de asincronismo
@@ -30,6 +29,7 @@ if __package__ in (None, ""):
 from main.reconocedor import interpretar, SIGNOS, Accion
 from main import motor
 from main import herramientas # generador de herramientas para la API (FASE G1)
+from main import cerebro # el traductor al proveedor de IA (Groq)
 
 
 # definimos el nombre del asistente
@@ -37,10 +37,11 @@ NOMBRE_ASISTENTE = "Jarvis"
 FRASE_ACTIVACION_INICIAL = ["jarvis despierta","jarvis, despierta","despierta jarvis", "arriba jarvis", "jarvis es hora de trabajar","a trabajar jarvis"]
 FRASE_ACTIVACION_NORMAL = ["hey jarvis", "jarvis","mira jarvis","oye jarvis", "escucha jarvis"]
 
-# modelo de la IA (FASE G2). El haiku 4.5 tenia retiro garantizado el
-# 15/10/2026 y esa fecha ya paso: haiku-5-5 es el actual y el mas barato.
-# En una constante nombrada para que cambiar de modelo sea UNA linea.
-MODELO_IA = "claude-haiku-5-5"
+# modelo de la IA (FASE G2). El modelo de Groq que se usa hoy, MEDIDO: usa
+# las 41 herramientas en espanol y VE la pantalla (se le mando el PNG real de
+# Edward y lo describio). cerebro.create usa su propia constante MODELO_GROQ y
+# este nombre no se le manda, pero se deja correcto para que nadie lea mentira.
+MODELO_IA = "qwen/qwen3.8-27b"
 
 
 # definimos el nombre del archivo de memoria
@@ -126,18 +127,19 @@ motor.conectar_memoria(_cargar_memoria_estricta, guardar_memoria)
 ruta_env = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(ruta_env) 
 
-# obtenemos la clave de API de Anthropic
-anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+# obtenemos la clave de API de Groq (el unico proveedor que usa Jarvis hoy)
+clave_ia = os.getenv("GROQ_API_KEY")
 
 # el cliente de la IA se crea SOLO cuando se pregunta algo, nunca al importar
 # el modulo: construirlo con una clave muerta o ausente haria el modulo
-# ingobernable y las pruebas no podrian ni importarlo.
+# ingobernable y las pruebas no podrian ni importarlo. El objeto es el de
+# cerebro.py, que habla con Groq con la MISMA cara que el cliente de antes.
 _cliente_ia = None
 
 def _obtener_cliente_ia():
     global _cliente_ia
     if _cliente_ia is None:
-        _cliente_ia = Anthropic(api_key=anthropic_api_key)
+        _cliente_ia = cerebro.ClienteGroq(clave_ia)
     return _cliente_ia
 
 # como se formatea la memoria del usuario cuando se le inyecta a la IA
@@ -282,23 +284,145 @@ def hablar(texto):
         except OSError:
             print("aviso: no se pudo borrar el mp3 de voz %s" % nombre_archivo)
 
+# ---------------------------------------------------------------------------
+# CALIBRACION DEL SILENCIO Y AMPLIFICACION ANTES DE TRANSCRIBIR
+# (arreglo del 2026-10-26) JARVIS NO OIA A EDWARD, y se midio con SU
+# microfono, en su portatil, 8 segundos de audio. La medida es la media de
+# np.abs() de cada bloque de 0.5 s (la MISMA que usa el bucle de abajo):
+#     ruido de la habitacion : 667 - 920
+#     cuando Edward habla   : 900 - 1294  (el maximo de todo el archivo 1294.5)
+#     umbral que usaba Jarvis: 1300 fijo  <-- POR ENCIMA DE SU VOZ
+# Consecuencia medida: como su voz casi nunca pasaba de 1300, la grabacion
+# creia que habia silencio desde el PRIMER bloque y cortaba a los 2 segundos, a
+# media frase. Google transcribia "Juana" en vez de "cuanta ram" y "es facil
+# disco" en vez de "espacio en disco". El microfono SI sirve: lo que estaba
+# mal calibrado era el umbral. Por eso ahora el umbral se MIDE antes de
+# escuchar, y el audio se amplifica antes de mandarlo al reconocedor.
+# ---------------------------------------------------------------------------
+
+# factor sobre el ruido medido: el umbral queda un 35% por encima de la
+# habitacion. Con el ruido de Edward (800) da 1080: por DEBAJO de su voz
+# (hasta 1294) y por ENCIMA del ruido. Ese es exactamente el hueco que faltaba.
+FACTOR_UMBRAL_SILENCIO = 1.35
+
+# suelo del umbral: en una habitacion muy callada el ruido medido puede dar 20,
+# y un umbral de 27 cortaria la grabacion con el primer roce del microfono
+UMBRAL_MINIMO_SILENCIO = 250.0
+
+# techo del umbral: NUNCA se sube del fijo que se usaba antes (1300), y el
+# motivo es el dato medido de arriba: la voz de Edward no pasa de 1294, asi que
+# por encima de 1300 Jarvis es sordo igual. Si la habitacion es tan ruidosa que
+# la regla adaptativa pide mas de 1300, se queda en 1300 y protege el tope de
+# max_segundos (mejor una frase cortada y anunciada que una grabacion eterna
+# con el ruido de un ventilador).
+UMBRAL_MAXIMO_SILENCIO = 1300.0
+
+# tope de amplificacion: x8 lleva una voz floja a la escala util sin convertir
+# el ruido de fondo en un grito. Sin tope, un audio casi mudo (pico 10) se
+# multiplicaria por 2000 y Google recibiria ruido amplificado.
+GANANCIA_MAXIMA_AUDIO = 8.0
+
+# pico de la escala de 32767 que se busca al amplificar: el 61% de la escala
+PICO_OBJETIVO_AUDIO = 20000.0
+
+# por debajo de este pico el audio NO es voz, es silencio. Amplificarlo solo
+# meteria ruido en el reconocedor (el ruido de Edward ronda 800 de media, asi
+# que un pico de 200 es silencio puro)
+PICO_MINIMO_VOZ = 200.0
+
+
+def calcular_umbral_silencio(ruido):
+    """umbral de silencio a partir del ruido de fondo de la habitacion
+
+    `ruido` es la media de np.abs() de un bloque, la MISMA medida que compara
+    el bucle de grabacion, para que los dos numeros sean comparables.
+
+    La regla es max(250, ruido * 1.35), con el techo de UMBRAL_MAXIMO_SILENCIO.
+    Con el ruido medido en el portatil de Edward (800) da 1080: por DEBAJO de
+    su voz (hasta 1294) y por ENCIMA del ruido de la habitacion. Con el 1300
+    fijo de antes, su voz caia siempre del lado del silencio.
+    """
+    umbral = ruido * FACTOR_UMBRAL_SILENCIO
+    if umbral < UMBRAL_MINIMO_SILENCIO:
+        umbral = UMBRAL_MINIMO_SILENCIO
+    if umbral > UMBRAL_MAXIMO_SILENCIO:
+        umbral = UMBRAL_MAXIMO_SILENCIO
+    return umbral
+
+
+def _audio_mas_fuerte(audio):
+    """sube el volumen de la grabacion ANTES de mandarla a Google
+
+    El microfono de Edward capta muy bajo: su voz dio pico 7560 de los 32767
+    posibles (23% de la escala). Con tres cuartos de la escala sin usar, el
+    reconocedor adivina. Aqui se calcula el pico y se aplica la ganancia que lo
+    lleva a PICO_OBJETIVO_AUDIO, con dos limites:
+
+      - nunca mas de GANANCIA_MAXIMA_AUDIO (x8): amplificar el ruido de fondo
+        solo lo hace mas dificil de transcribir;
+      - si el pico no llega a PICO_MINIMO_VOZ no hay voz que amplificar (es
+        silencio): se devuelve el audio TAL CUAL.
+
+    Devuelve int16 y SIN desbordar: el recorte con np.clip se hace en coma
+    flotante ANTES de convertir. Un int16 que se pasa da la vuelta (1000 * 40 =
+    40000 se vuelve -25536) y el audio entero queda hecho un ruido, que es
+    peor que el volumen bajo que se intentaba arreglar.
+    """
+    if audio.size == 0:
+        # microfono que devolvio cero muestras: no hay pico que medir
+        return audio
+    pico = float(np.abs(audio.astype(np.float64)).max())
+    if pico < PICO_MINIMO_VOZ:
+        # silencio o ruido minimo: amplificarlo solo mete ruido
+        return audio
+    ganancia = PICO_OBJETIVO_AUDIO / pico
+    if ganancia > GANANCIA_MAXIMA_AUDIO:
+        ganancia = GANANCIA_MAXIMA_AUDIO
+    if ganancia <= 1.0:
+        # ya viene fuerte: devolverlo igual evita tocar el audio sin motivo
+        return audio
+    return np.clip(audio.astype(np.float64) * ganancia,
+                   -32767.0, 32767.0).astype(np.int16)
+
+
 # definimos la funcion grabar_hasta_silencio que graba audio hasta detectar un
 # periodo de silencio, o hasta un TOPE DURADO de 20 segundos (bug B7).
 # Por que 20 segundos: una orden de voz normal entra en menos de 10 segundos,
 # y 20 deja holgura comoda para una instruccion larga. Sin tope, un ruido de
-# fondo continuo por encima del umbral de 1300 dejaba a Jarvis en
-# "Escuchando..." para siempre y los bloques crecian ~317 MB por hora. Si se
-# llega al tope se devuelve LO GRABADO y se AVISA: mejor una frase cortada y
-# anunciada que una charla perdida en silencio.
-def grabar_hasta_silencio(frecuencia=44100, umbral_silencio=1300,
+# fondo continuo por encima del umbral dejaba a Jarvis en "Escuchando..." para
+# siempre y los bloques crecian ~317 MB por hora. Si se llega al tope se
+# devuelve LO GRABADO y se AVISA: mejor una frase cortada y anunciada que una
+# charla perdida en silencio.
+#
+# `umbral_silencio=None` significa UMBRAL ADAPTATIVO: la primera captura de
+# 0.5 s se usa para medir el ruido de la habitacion y de ahi sale el umbral
+# (ver calcular_umbral_silencio). El 1300 fijo que habia antes era MAS ALTO que
+# la voz de Edward (maximo medido 1294.5) y por eso la grabacion cortaba a los
+# 2 segundos a media frase. Si quien llama pasa un umbral explicito, se usa ese
+# y NO se calibra nada (compatibilidad con las pruebas y con los usos que ya lo
+# pasaban).
+def grabar_hasta_silencio(frecuencia=44100, umbral_silencio=None,
                           segundos_silencio=2, max_segundos=20):
+    duracion_bloque = 0.5  # medio segundo por bloque
+    # la PRIMERA captura se reaprovecha: con umbral automatico es la que mide
+    # el ruido, y en los dos casos es el primer bloque de la grabacion. Asi el
+    # numero de capturas del microfono no cambia (una por bloque, como antes).
+    bloque = sd.rec(int(duracion_bloque * frecuencia), samplerate=frecuencia,
+                    channels=1, dtype='int16')
+    sd.wait()
+
+    if umbral_silencio is None:
+        ruido_medido = np.abs(bloque).mean()
+        umbral_silencio = calcular_umbral_silencio(ruido_medido)
+        # se imprime UNA vez y con su numero: sin esto, diagnosticar un corte
+        # a media frase obliga a adivinar con que umbral estaba escuchando
+        print("umbral de silencio calculado: %d (ruido medido %d)"
+              % (umbral_silencio, ruido_medido))
+
     bloques = []
     silencio_contador = 0
     transcurrido = 0.0
-    duracion_bloque = 0.5  # medio segundo por bloque
     while True:
-        bloque = sd.rec(int(duracion_bloque * frecuencia), samplerate=frecuencia, channels=1, dtype='int16')
-        sd.wait()
         bloques.append(bloque)
         transcurrido += duracion_bloque
         volumen = np.abs(bloque).mean()
@@ -316,6 +440,10 @@ def grabar_hasta_silencio(frecuencia=44100, umbral_silencio=1300,
                   "detectar silencio; puede haberse tragado el final de su "
                   "frase" % max_segundos)
             break
+
+        bloque = sd.rec(int(duracion_bloque * frecuencia),
+                        samplerate=frecuencia, channels=1, dtype='int16')
+        sd.wait()
 
     audio_completo = np.concatenate(bloques)
     return audio_completo
@@ -365,8 +493,10 @@ def escuchar_confirmacion():
         audio = grabar_hasta_silencio(frecuencia)
         # el patron de siempre (grabar + recognize_google es-ES), pero SIN
         # escribir un wav al disco: el AudioData va directo al reconocedor,
-        # sin dejar archivos en el directorio de trabajo
-        datos = sr.AudioData(audio.tobytes(), frecuencia, 2)
+        # sin dejar archivos en el directorio de trabajo. El audio va
+        # AMPLIFICADO: el microfono de Edward capta al 23% de la escala y el
+        # reconocedor adivina con ese volumen (ver _audio_mas_fuerte).
+        datos = sr.AudioData(_audio_mas_fuerte(audio).tobytes(), frecuencia, 2)
         return r.recognize_google(datos, language="es-ES")
     except (sr.UnknownValueError, sr.RequestError) as error:
         print("aviso: no se reconocio la confirmacion (%s)"
@@ -418,7 +548,10 @@ def _borrar_wav(ruta):
 # archivo no tiene que pedir microfono ni hablar.
 def pedir_nombre(memoria):
     hablar("Antes de comenzar, ¿cómo desea que lo llame mi señor?")
-    audio_nombre = grabar_hasta_silencio(frecuencia)
+    # se graba y se AMPLIFICA en una sola linea (ver _audio_mas_fuerte): el
+    # microfono de Edward capta al 23% de la escala y asi el reconocedor recibe
+    # la version fuerte. El nombre que se guarda en memoria es el de siempre.
+    audio_nombre = _audio_mas_fuerte(grabar_hasta_silencio(frecuencia))
     # la MISMA variable para escribir y para leer: el wav vive un solo
     # instante en el temp del sistema y no puede quedarse basura ni pisarse
     # entre dos instancias de Jarvis
@@ -704,7 +837,7 @@ def _tiene_clave_ia():
     camino de siempre (interpretar por palabras clave). Asi ninguna prueba
     ni ningun uso offline depende de red ni de clave.
     """
-    return bool(anthropic_api_key and anthropic_api_key.strip())
+    return bool(clave_ia and clave_ia.strip())
 
 
 def _texto_de_respuesta(respuesta):
@@ -753,12 +886,12 @@ def _resultado_de_tool_use(bloque, texto, es_error=False):
 def _bloque_de_imagen(ruta):
     """bloque image de la API con el PNG de `ruta`. Devuelve (bloque, error)
 
-    La API de Anthropic NO acepta BMP: solo image/jpeg, image/png, image/gif
-    e image/webp. El motor ya entrega un PNG reducido, asi que aqui no se
-    convierte nada: se lee el archivo y se codifica en base64, que es el
-    formato exacto que espera el bloque. Un archivo que no se puede leer se
-    devuelve como error de texto y el bucle SIGUE: no mirar la pantalla nunca
-    puede tumbar el turno.
+    El motor ya entrega un PNG reducido y el proveedor de IA (hoy Groq) lo
+    acepta y lo describe bien (medido con el PNG real de la pantalla de
+    Edward), asi que aqui no se convierte nada: se lee el archivo y se
+    codifica en base64, que es el formato exacto que espera el bloque. Un
+    archivo que no se puede leer se devuelve como error de texto y el bucle
+    SIGUE: no mirar la pantalla nunca puede tumbar el turno.
     """
     try:
         with open(ruta, "rb") as archivo:
@@ -779,11 +912,11 @@ def _resultado_con_imagen(bloque, ruta, nota=""):
     """tool_result con el TEXTO y la IMAGEN de la captura de pantalla
 
     PRIVACIDAD: esta funcion es el UNICO sitio por el que una captura de la
-    pantalla viaja a la API de Anthropic. Solo se llega aqui cuando el modelo
+    pantalla viaja a la API de Groq. Solo se llega aqui cuando el modelo
     pidio la herramienta mirar_pantalla, o sea cuando Edward pregunto algo que
     necesita ver la pantalla. NO es contexto automatico ni se manda en cada
     turno: mandar la pantalla significa que todo su contenido (correos,
-    chats, claves escritas) viaja a Anthropic, y por eso es una herramienta
+    chats, claves escritas) viaja a Groq, y por eso es una herramienta
     explicita. Por el mismo motivo el historial guarda el texto pero NO la
     imagen (ver _sin_imagenes): si se guardara, cada turno siguiente la
     reenviaria sin que nadie la pidiera y pagando los tokens otra vez.
@@ -955,7 +1088,8 @@ def _ejecutar_herramienta(bloque, hablar, escuchar):
 # El turno MAS NUEVO se conserva siempre, aunque el solo pase los topes.
 # ---------------------------------------------------------------------------
 
-# historial de la sesion actual, en el formato de la API de Anthropic
+# historial de la sesion actual, en el formato interno (el mismo de Anthropic,
+# que es el que traduce cerebro.py)
 HISTORIAL_SESION = []
 
 # topes del historial (ver el bloque de arriba: costo y contexto)
@@ -1005,9 +1139,13 @@ def _ids_de_tool_result(bloques):
 def _turno_valido(turno):
     """True si el turno se puede reenviar TAL CUAL a la API
 
-    Anthropic exige que los roles alternen y que cada tool_use vaya seguido,
-    en el mensaje SIGUIENTE, de SU tool_result (mismos ids). Un turno a
-    medias en el historial hace que la llamada siguiente devuelva 400 y
+    El formato INTERNO (el mismo de Anthropic, que es el que traduce
+    cerebro.py) exige que los roles alternen y que cada tool_use vaya seguido,
+    en el mensaje SIGUIENTE, de SU tool_result (mismos ids). Groq recibe ese
+    turno ya traducido, pero el traductor necesita la misma garantia (cada
+    tool_use con su resultado pegado), asi que la validacion sigue siendo
+    igual de necesaria. Un turno a medias en el historial hace que la llamada
+    siguiente devuelva 400 y
     Jarvis se quede mudo. Por eso esta comprobacion corre ANTES de guardar:
     si el turno no esta completo, no entra.
     """
@@ -1160,11 +1298,77 @@ def _agregar_turno(turno):
     _recortar_historial()
 
 
+# ---------------------------------------------------------------------------
+# QUE HERRAMIENTAS SE LE OFRECEN AL MODELO EN CADA FRASE (2026-10-26)
+#
+# MEDIDO con la clave real (no es una suposicion): el catalogo de las 41
+# herramientas cuesta 2.635 tokens de entrada y una frase completa 2.684. La
+# capa GRATIS de Groq da 7.000 tokens por minuto, asi que con las 41 solo
+# entran 1,3 frases por minuto y despues llega el HTTP 429. Con UNA sola
+# herramienta el mismo qwen mide 546 tokens: 5 veces menos.
+#
+# Recortar las descripciones de las 41 ahorra 113 tokens (4%): NO sirve y no se
+# hace. La palanca es mandar SOLO la herramienta que la frase necesita, y solo
+# cuando la frase pide UNA cosa. Si pide varias ("baja el volumen y abre
+# chrome") se mandan las 41: filtrar a una sola le quitaria una capacidad.
+# ---------------------------------------------------------------------------
+
+# trozos que delatan una frase con VARIAS ordenes encadenadas. Se comparan
+# sobre el texto YA normalizado con _sin_acentos, asi que aqui van SIN tildes:
+# "también" y "además" llegan aqui como "tambien" y "ademas". Escribir las
+# versiones con tilde seria codigo muerto: despues de normalizar nunca casan.
+VARIAS_ORDENES = (" y ", ",", " luego ", " despues ", " tambien ", " ademas ")
+
+
+def _trae_varias_ordenes(texto):
+    """True si la frase parece pedir MAS DE UNA orden a la vez
+
+    Motivo: "baja el volumen y abre chrome" necesita DOS herramientas, y
+    _herramientas_para no puede quedarse con una sola. Se mira el texto sin
+    acentos y en minusculas, que es como se comparan las ordenes en el
+    reconocedor. El " y " va con espacios para no confundirlo con la letra
+    dentro de una palabra ("youtube").
+    """
+    limpio = _sin_acentos(texto)
+    return any(trozo in limpio for trozo in VARIAS_ORDENES)
+
+
+def _herramientas_para(texto):
+    """las definiciones que se le ofrecen al modelo para ESTA frase
+
+    Con las 41 el catalogo cuesta 2.635 tokens y la capa gratis aguanta 1,3
+    frases por minuto. Si la frase ya cae en UNA sola orden conocida y no trae
+    varias ordenes encadenadas, se ofrece solo esa: 546 tokens medidos.
+
+    Se recorre interpretar(texto) (el mismo reconocedor de palabras clave que
+    usa el camino sin clave) y cada accion se traduce al nombre del MOTOR con
+    TRADUCCION_MOTOR, porque el catalogo habla el vocabulario del motor
+    ("hora" -> "hora_actual"). consultar_ia no cuenta: no es una herramienta
+    del catalogo, es "que conteste la IA", o sea el camino de las 41.
+    """
+    definiciones = herramientas.herramientas()
+    nombres = set()
+    for accion in interpretar(texto):
+        if accion.nombre == "consultar_ia":
+            continue
+        nombres.add(TRADUCCION_MOTOR.get(accion.nombre, accion.nombre))
+    if len(nombres) == 1 and not _trae_varias_ordenes(texto):
+        elegidas = [definicion for definicion in definiciones
+                    if definicion.get("name") in nombres]
+        if elegidas:
+            print("aviso: mando %d herramienta en vez de %d "
+                  "(ahorra ~2100 tokens)" % (len(elegidas), len(definiciones)))
+            return elegidas
+        # el filtro dejo la lista VACIA (una accion que no esta en el
+        # catalogo): se cae a las 41 y el modelo nunca se queda sin nada
+    return definiciones
+
+
 def bucle_agente(texto_usuario, memoria, hablar=hablar,
                  escuchar=escuchar_confirmacion):
     """el bucle agente (FASE G2): el modelo usa herramientas hasta responder
 
-    Flujo: messages.create CON tools=herramientas.herramientas() ->
+    Flujo: messages.create CON tools=_herramientas_para(texto_usuario) ->
     si la respuesta trae tool_use, cada peticion se ejecuta en el MOTOR y su
     tool_result se manda de vuelta en otra llamada. Se repite hasta que el
     modelo devuelva TEXTO (end_turn), que es lo que se le dice a Edward, o
@@ -1192,7 +1396,7 @@ def bucle_agente(texto_usuario, memoria, hablar=hablar,
     if memoria is None:
         memoria = cargar_memoria()
     system = _system_de(memoria)
-    definiciones = herramientas.herramientas()
+    definiciones = _herramientas_para(texto_usuario)
     # el turno arranca con el historial de la sesion y la frase de ahora
     mensajes = list(HISTORIAL_SESION)
     mensajes.append({"role": "user", "content": texto_usuario})
@@ -1334,6 +1538,10 @@ def procesar_orden():
     while True:
         print("Escuchando...")
         audio = grabar_hasta_silencio(frecuencia)
+        # el wav se escribe AMPLIFICADO (ver _audio_mas_fuerte): con el
+        # volumen bajo del microfono de Edward Google adivinaba ("Juana" por
+        # "cuanta ram"). El audio de ESTA frase se amplifica una sola vez.
+        audio = _audio_mas_fuerte(audio)
         # la MISMA variable para escribir y para leer, en el temp del sistema
         # (antes: "grabacion.wav" relativa al directorio de trabajo, siempre)
         ruta_wav = _ruta_wav_unico("grabacion")
@@ -1417,6 +1625,9 @@ def bucle_principal():
     while True:
         audio_corto = sd.rec(int(3 * frecuencia), samplerate=frecuencia, channels=1, dtype='int16')
         sd.wait()
+        # la activacion tambien va amplificada: es la MISMA voz baja de Edward
+        # y si "jarvis" no se entiende el resto de la conversacion no empieza
+        audio_corto = _audio_mas_fuerte(audio_corto)
 
         # la MISMA variable para escribir y para leer, en el temp del sistema
         # (antes: "escucha_activacion.wav" relativa al directorio de trabajo)

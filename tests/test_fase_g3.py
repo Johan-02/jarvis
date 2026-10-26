@@ -101,7 +101,7 @@ class TestProcesarOrdenDelegaEnAtender(unittest.TestCase):
         reloj.time.side_effect = [0.0, 100.0]
         consola = io.StringIO()
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "atender", atender_falso), \
                 mock.patch.object(
                     main, "grabar_hasta_silencio",
@@ -190,7 +190,7 @@ class TestLaDestructivaPreguntaUnaSolaVez(unittest.TestCase):
         # generar voz real
         voz = mock.MagicMock()
         escucha = mock.MagicMock(return_value="si")
-        with mock.patch.object(main, "anthropic_api_key", "clave-falsa"), \
+        with mock.patch.object(main, "clave_ia", "clave-falsa"), \
                 mock.patch.object(main, "_obtener_cliente_ia",
                                   mock.MagicMock(return_value=cliente)), \
                 mock.patch.object(main, "hablar", voz), \
@@ -239,7 +239,7 @@ class TestLaDestructivaPreguntaUnaSolaVez(unittest.TestCase):
         voz = mock.MagicMock()
         cliente = mock.MagicMock()
         freno = motor.Resultado(ok=False, detalle=motor.REQUIERE_CONFIRMACION)
-        with mock.patch.object(main, "anthropic_api_key", None), \
+        with mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "_obtener_cliente_ia", cliente), \
                 mock.patch.object(main, "hablar", voz), \
                 mock.patch.object(main.motor, "ejecutar",
@@ -305,7 +305,7 @@ class TestLaDestructivaPreguntaUnaSolaVez(unittest.TestCase):
 
         consola = io.StringIO()
         with mock.patch.object(main, "time", reloj), \
-                mock.patch.object(main, "anthropic_api_key", None), \
+                mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "hablar", voz), \
                 mock.patch.object(main.motor, "ejecutar",
                                   mock.MagicMock(
@@ -366,7 +366,7 @@ class TestSinClaveSigueIgualQueHoy(unittest.TestCase):
             "el REGISTRO de la FASE E2 tenia 37 acciones; la H2 agrego "
             "mirar_pantalla y la H3 recordar, olvidar y leer_memoria")
         cliente = mock.MagicMock()
-        with mock.patch.object(main, "anthropic_api_key", None), \
+        with mock.patch.object(main, "clave_ia", None), \
                 mock.patch.object(main, "_obtener_cliente_ia", cliente), \
                 mock.patch.object(main, "hablar", mock.MagicMock()), \
                 mock.patch.object(main.motor, "ejecutar",

@@ -314,7 +314,9 @@ class TestReconocedor(unittest.TestCase):
 
         Se mide por AST (imports, nombres de variables y atributos), no como
         texto: un COMENTARIO que mencione "hablar" no ejecuta nada y no tiene
-        que delatar al modulo. Solo puede importar la libreria de dataclasses.
+        que delatar al modulo. Solo puede importar stdlib: dataclasses y
+        unicodedata (esta ultima para quitar tildes al COMPARAR, que la usa
+        _sin_acentos desde el 2026-10-26).
         """
         texto = RUTA_RECONOCEDOR.read_text(encoding="utf-8")
         arbol = ast.parse(texto)
@@ -332,7 +334,7 @@ class TestReconocedor(unittest.TestCase):
             elif isinstance(nodo, ast.Attribute):
                 nombres_usados.add(nodo.attr)
         self.assertEqual(
-            sorted(importados - {"dataclasses"}), [],
+            sorted(importados - {"dataclasses", "unicodedata"}), [],
             "main/reconocedor.py importa librerias que no son de stdlib")
         prohibidos = {
             "hablar", "preguntar_a_ia", "webbrowser", "anthropic",
