@@ -67,14 +67,14 @@ BASE: hora_actual
 decide** qué hacer y actúa con las herramientas del motor. El ciclo, en
 lenguaje claro (Fases G2/G3):
 
-1. El modelo recibe la frase de Edward **junto con las herramientas del motor**.
+1. El modelo recibe la frase del usuario **junto con las herramientas del motor**.
    Las genera `main/herramientas.py` **a partir de `motor.REGISTRO`**, sin
    ningún catálogo propio: quien agrega una acción al registro obtiene su
    herramienta sola, sin tocar el generador.
 2. Si el modelo pide una herramienta, **el motor la ejecuta de verdad** y su
    resultado se le devuelve como respuesta; el modelo **ve el resultado y
    sigue** (pide otra herramienta o responde con el texto final, que es lo
-   que se le dice a Edward en voz).
+   que se le dice al usuario en voz).
 3. **Tope: 5 iteraciones.** Al llegar, Jarvis avisa honestamente que cortó
    por seguridad, en vez de inventarse una respuesta.
 
@@ -95,7 +95,7 @@ Reduce a la mitad (1 de cada 2 píxeles, ancho máximo 1280): una pantalla de
 1366×768 queda en **683×384 y ~0,10 MB**, validada con un decodificador
 independiente (.NET la abre). El `tool_result` lleva un bloque `image` con
 `media_type: image/png` en base64. **La imagen SOLO sale cuando el modelo
-decide mirar** (Edward pregunta algo que necesita ver la pantalla); no se
+decide mirar** (el usuario pregunta algo que necesita ver la pantalla); no se
 manda en cada turno, porque el contenido de la pantalla viaja a Groq.
 
 **Aprender (Fase H3).** `recordar` agrega una nota a `memoria.json` y
@@ -105,7 +105,7 @@ importan:
   estricto y su escritura atómica (Fase B, B9).
 - **Antes de escribir se valida el JSON.** Si `memoria.json` está roto,
   `recordar` devuelve `ok=False` y **no toca el archivo**: sin esa comprobación
-  se reemplazaría por una memoria vacía y las notas de Edward se perderían
+  se reemplazaría por una memoria vacía y las notas del usuario se perderían
   para siempre. Probado con un archivo roto de verdad (queda bit a bit igual).
 - Evita duplicados exactos (espacios colapsados).
 - Tras un `recordar`/`olvidar`, el bucle **relee la memoria y rehace el system
@@ -115,7 +115,7 @@ importan:
 **Modelo actual: `qwen/qwen3.8-27b`**, servido por **Groq** en su endpoint
 compatible con OpenAI (`https://api.groq.com/openai/v1/chat/completions`),
 hablado con `urllib` de la stdlib (constante `MODELO_IA` en `main.py`).
-**Ve la pantalla**: probado con el PNG real de la pantalla de Edward (30.543
+**Ve la pantalla**: probado con el PNG real de una pantalla (30.543
 bytes) y el modelo la describió correctamente. Cambiar de modelo es UNA
 línea; el traductor del formato interno al de OpenAI/Groq vive en
 `main/cerebro.py` (clase `cerebro.ClienteGroq`), así el bucle no se toca.
@@ -156,7 +156,7 @@ G3) y hace que el modo offline no dependa de red ni de clave.
     saltarse la confirmación. Lo garantiza `tests/test_herramientas.py`,
     que recorre TODAS las herramientas sin lista escrita a mano.
   - **El que pregunta por VOZ es el programa, NO el modelo**: cuando el motor
-    frena una destructiva, es Jarvis quien le pregunta a Edward con su voz y
+    frena una destructiva, es Jarvis quien le pregunta al usuario con su voz y
     escucha la respuesta por micrófono (nunca el teclado).
   - **Si Jarvis no entiende la respuesta (silencio, error, sin internet),
     RECHAZA**: un silencio JAMÁS vale como "sí". **Reintentos: 2** (3
