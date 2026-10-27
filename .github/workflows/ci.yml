@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Instalar dependencias del proyecto
+        run: pip install -r requirements.txt
+
+      - name: Instalar pyflakes
+        run: pip install pyflakes
+
+      - name: Ejecutar pyflakes
+        run: python -m pyflakes main tests
+
+      - name: Ejecutar pruebas
+        run: python -m unittest discover -s tests
