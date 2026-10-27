@@ -1,9 +1,8 @@
 """Interfaz visual de voz para Jarvis.
 
-Ventana flotante, sin bordes y siempre encima que dibuja un ecualizador de
-barras verticales (estilo visualizador de musica) mientras Jarvis habla o
-escucha. Las barras suben y bajan de forma organica, como si "vivieran" con
-el audio, en el degradado azul -> purpura -> rosado de Edward.
+Ventana flotante, sin bordes, transparente y siempre encima que dibuja un
+visualizador circular AZUL (ondas concéntricas que se expanden desde el
+centro como ondas de sonido en el agua) mientras Jarvis habla o escucha.
 
 Diseno de hilos (importante): tkinter NO es seguro entre hilos. Toda llamada
 a tkinter (crear ventana, canvas, after, deiconify, withdraw) corre en el
@@ -14,30 +13,26 @@ ese hilo. Asi no hay llamadas cruzadas a tkinter ni RuntimeError.
 
 import threading
 import time
-import math
 
 import tkinter as tk
 
 
 class InterfazVoz:
-    """Ventana con barras verticales de ecualizador que suben y bajan."""
+    """Ventana con ondas circulares azules que se expanden desde el centro."""
 
     ANCHO = 400
     ALTO = 400
-    FONDO = "#000000"  # negro total: solo se ven las barras animadas
-    # degradado: azul -> purpura -> rosado (colores de Edward)
-    COLORES = [
-        "#667eea",  # azul
-        "#764ba2",  # purpura
-        "#ff69b4",  # rosado
-    ]
-    CANTIDAD_BARRAS = 24
-    ANCHO_BARRA = 6
-    ESPACIO_BARRA = 9
-    VELOCIDAD = 3.0  # ciclos de subida/bajada por segundo
-    TICK_MS = 30  # ~33 fps
-    ALTURA_MIN = 12  # altura minima de cada barra (siempre visible)
-    ALTURA_MAX = 170  # altura maxima de una barra
+    FONDO = "#000000"            # negro: coincide con el color transparente
+    TRANSPARENCIA = "#000000"    # color que la ventana vuelve transparente
+    COLOR_ONDA = "#1e90ff"       # azul predominante (dodgerblue)
+    COLOR_ONDA_CLARA = "#6fb4ff" # azul mas claro hacia el borde de la onda
+    CANTIDAD_ONDAS = 6           # cuantas ondas concurrentes maximo
+    VELOCIDAD = 90.0             # px por segundo de expansion
+    TICK_MS = 30                 # ~33 fps
+    RADIO_MAX = 170              # radio maximo de una onda (px)
+    RADIO_MIN = 14               # radio donde nace una nueva onda (px)
+    GROSOR = 3                   # grosor de la linea de cada onda (px)
+    NACE_CADA_SEGUNDOS = 0.5     # periodo entre el nacimiento de ondas
 
     def __init__(self):
         self.ventana = None
@@ -45,6 +40,8 @@ class InterfazVoz:
         self._activa = False
         self._corriendo = False
         self._hilo = None
+        self._ondas = []         # lista de dicts {radio}
+        self._ultima_nacimiento = 0.0
 
     def esta_activa(self):
         """Devuelve True si la ventana esta visible y animando."""
@@ -61,6 +58,7 @@ class InterfazVoz:
             return
         self._activa = True
         self._corriendo = True
+        self._ultima_nacimiento = time.time()
         if self._hilo is None or not self._hilo.is_alive():
             self._hilo = threading.Thread(target=self._ejecutar, daemon=True)
             self._hilo.start()
@@ -71,6 +69,7 @@ class InterfazVoz:
             self.ventana = tk.Tk()
             self.ventana.overrideredirect(True)  # sin bordes ni barra de titulos
             self.ventana.attributes("-topmost", True)  # siempre encima
+            self.ventana.attributes("-transparentcolor", self.TRANSPARENCIA)
             self.ventana.configure(bg=self.FONDO)
             # NO focus_force ni grab_set: la ventana no roba el foco del
             # teclado, asi Jarvis sigue escuchando por el microfono.
@@ -118,29 +117,26 @@ class InterfazVoz:
         except tk.TclError:
             pass
 
-    def _color_barra(self, indice):
-        """Color de una barra segun su indice en el degradado azul->purpura->rosado."""
-        if self.CANTIDAD_BARRAS > 1:
-            i = indice * (len(self.COLORES) - 1) / (self.CANTIDAD_BARRAS - 1)
-        else:
-            i = 0.0
-        n = len(self.COLORES) - 1
-        i0 = min(int(i), n - 1) if n > 0 else 0
-        i1 = min(i0 + 1, n)
-        f = i - i0
-        c0 = self._hex_a_rgb(self.COLORES[i0])
-        c1 = self._hex_a_rgb(self.COLORES[i1])
-        r = int(c0[0] + (c1[0] - c0[0]) * f)
-        g = int(c0[1] + (c1[1] - c0[1]) * f)
-        b = int(c0[2] + (c1[2] - c0[2]) * f)
-        return "#%02x%02x%02x" % (r, g, b)
+    def _nacer_onda(self):
+        """Crea una nueva onda en el centro si hay espacio."""
+        if len(self._ondas) < self.CANTIDAD_ONDAS:
+            self._ondas.append({"radio": float(self.RADIO_MIN)})
+
+    def _color_onda(self, radio):
+        """Azul fuerte al nacer que se vuelve mas claro al crecer."""
+        proporcion = (radio - self.RADIO_MIN) / (self.RADIO_MAX - self.RADIO_MIN)
+        proporcion = min(max(proporcion, 0.0), 1.0)
+        return self._mezclar_color(self.COLOR_ONDA, self.COLOR_ONDA_CLARA, proporcion)
 
     @staticmethod
-    def _hex_a_rgb(hex_color):
-        """convierte "#RRGGBB" en (R, G, B)"""
-        return (int(hex_color[1:3], 16),
-                int(hex_color[3:5], 16),
-                int(hex_color[5:7], 16))
+    def _mezclar_color(c1, c2, f):
+        """interpola dos colores hex RRGGBB"""
+        r1, g1, b1 = (int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16))
+        r2, g2, b2 = (int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16))
+        r = int(r1 + (r2 - r1) * f)
+        g = int(g1 + (g2 - g1) * f)
+        b = int(b1 + (b2 - b1) * f)
+        return "#%02x%02x%02x" % (r, g, b)
 
     def _dibujar_frame(self):
         if self.canvas is None or not self._corriendo:
@@ -151,29 +147,30 @@ class InterfazVoz:
             self._corriendo = False
             return
         ahora = time.time()
-        # posicion inicial centrada: las barras ocupan el centro de la ventana
-        total_ancho = (self.CANTIDAD_BARRAS * self.ANCHO_BARRA +
-                       (self.CANTIDAD_BARRAS - 1) * self.ESPACIO_BARRA)
-        x_inicio = (self.ANCHO - total_ancho) // 2
-        base_y = self.ALTO - 40  # las barras crecen hacia arriba desde aqui
-        for indice in range(self.CANTIDAD_BARRAS):
-            # cada barra tiene su propia fase para que el ecualizador parezca
-            # organico, no un bloque que sube y baja todo junto
-            fase = (ahora * self.VELOCIDAD + indice * 0.75) % (2 * math.pi)
-            # altura oscilante entre ALTURA_MIN y ALTURA_MAX
-            altura = self.ALTURA_MIN + int(
-                (self.ALTURA_MAX - self.ALTURA_MIN) *
-                (0.5 + 0.5 * math.sin(fase)))
-            x = x_inicio + indice * (self.ANCHO_BARRA + self.ESPACIO_BARRA)
-            color = self._color_barra(indice)
+        cx = self.ANCHO // 2
+        cy = self.ALTO // 2
+        paso = self.VELOCIDAD * (self.TICK_MS / 1000.0)
+        vivas = []
+        for onda in self._ondas:
+            radio = onda["radio"] + paso
+            if radio > self.RADIO_MAX:
+                continue  # la onda murio, no se conserva
             try:
-                self.canvas.create_rectangle(
-                    x, base_y - altura,
-                    x + self.ANCHO_BARRA, base_y,
-                    fill=color, outline="")
+                self.canvas.create_oval(
+                    cx - radio, cy - radio,
+                    cx + radio, cy + radio,
+                    outline=self._color_onda(radio),
+                    width=self.GROSOR)
             except tk.TclError:
                 self._corriendo = False
                 return
+            vivas.append({"radio": radio})
+        self._ondas = vivas
+        if ahora - self._ultima_nacimiento >= self.NACE_CADA_SEGUNDOS:
+            self._nacer_onda()
+            self._ultima_nacimiento = ahora
+        if not self._ondas:
+            self._nacer_onda()
 
     def detener(self):
         """Detiene la animacion y oculta la ventana."""
