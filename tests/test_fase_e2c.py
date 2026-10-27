@@ -90,6 +90,8 @@ def _doblado():
               for nombre in ("os", "subprocess", "ctypes")}
     dobles["os"].path.join.side_effect = \
         lambda *partes: "\\".join(str(parte) for parte in partes)
+    dobles["os"].path.normpath.side_effect = lambda texto: texto
+    dobles["os"].path.expanduser.side_effect = lambda texto: texto
     with contextlib.ExitStack() as pila:
         for nombre, doble in dobles.items():
             pila.enter_context(mock.patch.object(motor, nombre, doble))
@@ -417,18 +419,17 @@ class TestBrillo(unittest.TestCase):
         self.assertTrue(resultado.ok, resultado.detalle)
         self.assertIn("50%", resultado.detalle)
 
-    def test_clase_wmi_vacia_devuelve_ok_false_sin_reventar(self):
-        """monitor externo/escritorio: la clase viene VACIA y hay que
-        DECIRLO, con la sugerencia, en vez de devolver un exito a ciegas"""
+    def test_clase_wmi_vacia_devuelve_ok_false_con_el_error_real(self):
+        """ya no hay caso especial "VACIA": si powershell no dice OK, se
+        devuelve su salida real como error. No se inventa un mensaje."""
         with _doblado() as dobles:
             _powershell_falso(dobles, salida="VACIA\r\n")
             resultado = motor.ejecutar(Accion("brillo", (80,)))
 
         self.assertFalse(
             resultado.ok,
-            "con la clase WMI vacia marco ok=True (exito a ciegas)")
-        self.assertIn("no controla el brillo", resultado.detalle)
-        self.assertIn("ms-settings:display", resultado.detalle)
+            "con salida no-OK marco ok=True")
+        self.assertIn("no confirmo el brillo: VACIA", resultado.detalle)
 
     def test_fuera_de_rango_no_corre_powershell(self):
         """0 a 100, numeros de verdad: todo lo demas se rechaza ANTES de

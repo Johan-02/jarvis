@@ -34,6 +34,7 @@ import dataclasses
 import datetime
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -386,16 +387,13 @@ _ALIAS_VENTANA = {
     "calculadora": ("calculadora", "calculator"),
 }
 
-# raices de BUSQUEDA por defecto, medidas en esta PC el 2026-10-21: son los
-# nombres FISICOS de las carpetas del perfil. NUNCA se arranca en la raiz del
-# disco: C:\ entero tarda ~59 s en recorrerse (y ~2 min si ademas se miden
-# tamaños), y por eso la busqueda viene ACOTADA a estas tres carpetas salvo
-# que el usuario pida otra raiz a mano.
-_RAICES_BUSQUEDA = {
-    "escritorio": "Desktop",
-    "documentos": "Documents",
-    "descargas": "Downloads",
-}
+# La busqueda ya NO viene acotada a tres carpetas: cualquier carpeta del
+# sistema es valida. Los nombres Escritorio/Documentos/Descargas (y sus
+# formas en ingles) se resuelven como alias de conveniencia dentro de
+# _ruta_de_raiz, pero tambien se acepta cualquier ruta absoluta, relativa o
+# con ~ (usuario). NUNCA se arranca en la raiz del disco a menos que el
+# usuario la pida a mano: C:\ entero tarda ~59 s en recorrerse.
+# ---------------------------------------------------------------------------
 
 # cuantos archivos devuelve como maximo una busqueda: cientos de rutas no son
 # algo que se pueda leer ni escuchar
@@ -422,19 +420,28 @@ _ERROR_SUBPROCESO = subprocess.CalledProcessError
 
 
 def _ruta_de_raiz(raiz):
-    """ruta absoluta de una raiz de busqueda, o None si no se resuelve
+    """ruta absoluta de cualquier carpeta, o None si no existe
 
-    Acepta el ALIAS de _RAICES_BUSQUEDA ("documentos"), el nombre fisico de
-    la carpeta ("Documents") o una ruta entera. El None es lo que el llamador
-    necesita para contestar ok=False sin que nadie revente.
+    Acepta una ruta absoluta, relativa o con ~ (usuario), ademas de los
+    alias Escritorio/Documentos/Descargas (y sus formas en ingles). Se
+    resuelve con os.path.abspath / os.path.expanduser y se devuelve si
+    existe; si no existe, devuelve None. Ya no se limita a tres carpetas:
+    cualquier carpeta del sistema es valida.
     """
     if not isinstance(raiz, str) or not raiz.strip():
         return None
     texto = raiz.strip()
-    carpeta = _RAICES_BUSQUEDA.get(texto.lower())
-    if carpeta is None:
-        return texto
-    return os.path.join(os.path.expanduser("~"), carpeta)
+    bajo = texto.lower()
+    if bajo in ("escritorio", "desktop"):
+        texto = os.path.join(os.path.expanduser("~"), "Desktop")
+    elif bajo in ("documentos", "documents"):
+        texto = os.path.join(os.path.expanduser("~"), "Documents")
+    elif bajo in ("descargas", "downloads"):
+        texto = os.path.join(os.path.expanduser("~"), "Downloads")
+    ruta = os.path.normpath(os.path.expanduser(texto))
+    if not os.path.isdir(ruta):
+        return None
+    return ruta
 
 
 def _ignorar_error_de_walk(_error):
@@ -451,9 +458,10 @@ def abrir_archivo(ruta):
     """abre un archivo o una carpeta con el programa que Windows asocie. Inocua.
 
     Solo pide al sistema abrir algo que YA existe: no borra, no modifica y no
-    instala. Se admite el alias de _RAICES_BUSQUEDA ("escritorio") ademas de
-    una ruta entera. Lo que no existe devuelve ok=False en vez de sacar un
-    FileNotFoundError al llamador: el motor NUNCA lanza excepciones.
+    instala. Se admite el alias Escritorio/Documentos/Descargas (y su forma en
+    ingles) ademas de una ruta entera. Lo que no existe devuelve ok=False en
+    vez de sacar un FileNotFoundError al llamador: el motor NUNCA lanza
+    excepciones.
     """
     destino = _ruta_de_raiz(ruta)
     if destino is None:
@@ -625,7 +633,7 @@ def buscar_archivo(texto, raiz=None):
     """busca archivos cuyo nombre CONTENGA `texto`. SOLO LEE. Inocua.
 
     os.walk con onerror (una carpeta sin permisos se salta) y con raiz por
-    defecto ACOTADA a Escritorio/Documentos/Descargas: recorrer C:\\ entero
+    defecto el DIRECTORIO DE USUARIO COMPLETO (~): recorrer C:\\ entero
     tarda ~59 s (y ~2 min midiendo tamaños), medido el 2026-10-21. NO usa la
     busqueda de Windows (Windows Search), que exige su indice y su servicio.
     `raiz` acepta el alias ("documentos") o una ruta entera; una raiz que no
@@ -636,11 +644,10 @@ def buscar_archivo(texto, raiz=None):
     buscado = texto.strip().lower()
 
     if raiz is None:
-        raices = [os.path.join(os.path.expanduser("~"), carpeta)
-                  for carpeta in _RAICES_BUSQUEDA.values()]
+        raices = [os.path.expanduser("~")]
     else:
         ruta = _ruta_de_raiz(raiz)
-        if ruta is None or not os.path.isdir(ruta):
+        if ruta is None:
             return Resultado(
                 ok=False, detalle="raiz no valida: " + repr(raiz))
         raices = [ruta]
@@ -680,12 +687,10 @@ def buscar_archivo(texto, raiz=None):
 def brillo(nivel):
     """pone el brillo de la pantalla en `nivel` (0 a 100). Inocua.
 
-    powershell con WMI, VERIFICADO en esta PC el 2026-10-21: de 81 a 80 y
-    de vuelta a 81 SIN permisos de administrador. La clase
-    WmiMonitorBrightnessMethods solo existe en pantallas INTERNAS: en un
-    monitor externo/escritorio la coleccion viene VACIA, y eso se devuelve
-    como ok=False con su motivo, NUNCA como un exito a ciegas. El nivel se
-    rechaza fuera de [0, 100] ANTES de correr powershell.
+    Siempre intenta el comando powershell con WMI: si imprime "OK" devuelve
+    ok=True, y si imprime otra cosa o falla devuelve ok=False con el error
+    real del comando. El nivel se rechaza fuera de [0, 100] ANTES de correr
+    powershell.
     """
     if isinstance(nivel, bool) or not isinstance(nivel, (int, float)) \
             or not 0 <= nivel <= 100:
@@ -693,14 +698,12 @@ def brillo(nivel):
             ok=False,
             detalle="brillo fuera de rango: %r (acepto de 0 a 100)"
             % (nivel,))
-    # el script PREGUNTA primero si la clase trae algo: si esta VACIA no se
-    # llama a WmiSetBrightness y el motor lo entiende por el texto "VACIA".
-    # "OK" solo se imprime DESPUES de llamar al metodo, de modo que un exito
-    # sin cambio real no puede pasar por bueno
+    # Siempre se intenta: si el monitor no existe, powershell falla y se
+    # devuelve su error real en vez de un "no controla el brillo" inventado.
     script = (
-        "$m = Get-WmiObject -Namespace root\\wmi -Class "
-        "WmiMonitorBrightnessMethods; if ($m) { $null = "
-        "$m.WmiSetBrightness(0, %d); 'OK' } else { 'VACIA' }"
+        "Get-WmiObject -Namespace root\\wmi -Class "
+        "WmiMonitorBrightnessMethods | "
+        "ForEach-Object { $null = $_.WmiSetBrightness(0, %d) }; 'OK'"
         % int(nivel))
     comando = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                script]
@@ -713,15 +716,12 @@ def brillo(nivel):
     except OSError as error:
         return Resultado(
             ok=False, detalle="no pude correr powershell: %s" % (error,))
-    if "VACIA" in (hecho.stdout or ""):
-        return Resultado(
-            ok=False,
-            detalle="este equipo no controla el brillo de esta pantalla; "
-                    "pruebe ms-settings:display")
-    if "OK" not in (hecho.stdout or ""):
-        return Resultado(
-            ok=False, detalle="powershell no confirmo el cambio de brillo")
-    return Resultado(ok=True, detalle="brillo en %d%%" % int(nivel))
+    salida = (hecho.stdout or "").strip()
+    if salida == "OK":
+        return Resultado(ok=True, detalle="brillo en %d%%" % int(nivel))
+    return Resultado(
+        ok=False,
+        detalle="powershell no confirmo el brillo: " + (salida or "sin respuesta"))
 
 
 def _validar_espera(segundos):
@@ -927,8 +927,9 @@ def _bmp_de_pantalla():
 def capturar_pantalla(destino="escritorio"):
     """guarda una captura de la pantalla en un BMP dentro de `destino`. Inocua.
 
-    `destino` es SIEMPRE una CARPETA (el alias de _RAICES_BUSQUEDA o una
-    ruta entera); el nombre del archivo lo arma el motor con la hora
+    `destino` es SIEMPRE una CARPETA (cualquier ruta absoluta, relativa o con
+    ~, o el alias Escritorio/Documentos/Descargas); el nombre del archivo lo
+    arma el motor con la hora
     ("captura_20261021_153042.bmp"), porque el reconocedor es puro y no
     trae reloj. NO se admite un archivo como destino (decision tomada y
     documentada el 2026-10-23: una sola forma, sin ambiguedad).
@@ -946,8 +947,21 @@ def capturar_pantalla(destino="escritorio"):
     """
     carpeta = _ruta_de_raiz(destino)
     if carpeta is None:
-        return Resultado(
-            ok=False, detalle="falta la carpeta donde guardar la captura")
+        # _ruta_de_raiz exige que la carpeta YA exista (comprueba isdir),
+        # pero capturar_pantalla la crea, asi que resolvemos la ruta sin
+        # esa exigencia. Si la ruta no se puede resolver en absoluto, se niega.
+        if not isinstance(destino, str) or not destino.strip():
+            return Resultado(
+                ok=False, detalle="falta la carpeta donde guardar la captura")
+        texto = destino.strip()
+        bajo = texto.lower()
+        if bajo in ("escritorio", "desktop"):
+            texto = os.path.join(os.path.expanduser("~"), "Desktop")
+        elif bajo in ("documentos", "documents"):
+            texto = os.path.join(os.path.expanduser("~"), "Documents")
+        elif bajo in ("descargas", "downloads"):
+            texto = os.path.join(os.path.expanduser("~"), "Downloads")
+        carpeta = os.path.normpath(os.path.expanduser(texto))
     try:
         # exist_ok=True perdona la carpeta que YA existe; cualquier otra
         # cosa (un archivo pasado por error, caracteres ilegales, un disco
@@ -1789,22 +1803,22 @@ def peso_de(raiz=None):
     """peso en disco de `raiz` sumando sus archivos con os.walk. Inocua.
 
     Solo SUMA tamanios: no borra ni modifica nada. Igual que buscar_archivo,
-    la raiz por defecto viene ACOTADA a Escritorio/Documentos/Descargas:
-    recorrer C:\\ entero tarda ~59 s medido el 2026-10-21, y con tamanios
-    mas. El onerror salta las carpetas sin permisos (C:\\System Volume
-    Information, por ejemplo) y un archivo ilegible se CUENTA aparte en vez
-    de romper la suma. Ruta invalida -> ok=False SIN recorrer nada.
-    `raiz` acepta el alias ("documentos") o una ruta entera.
+    la raiz por defecto es el DIRECTORIO DE USUARIO COMPLETO (~): recorrer
+    C:\\ entero tarda ~59 s medido el 2026-10-21, y con tamanios mas. `raiz`
+    acepta cualquier ruta absoluta, relativa o con ~, o el alias
+    ("documentos"). Una raiz que no es una carpeta devuelve ok=False SIN
+    recorrer nada y sin reventar.
     """
     if raiz is None:
-        raices = [os.path.join(os.path.expanduser("~"), carpeta)
-                  for carpeta in _RAICES_BUSQUEDA.values()]
-        origen = "Escritorio, Documentos y Descargas"
+        raices = [os.path.expanduser("~")]
+        origen = os.path.expanduser("~")
     else:
         ruta = _ruta_de_raiz(raiz)
-        if ruta is None or not os.path.isdir(ruta):
+        if ruta is None:
             return Resultado(
                 ok=False, detalle="raiz no valida: " + repr(raiz))
+        raices = [ruta]
+        origen = str(raiz)
         raices = [ruta]
         origen = str(raiz)
 
@@ -1841,11 +1855,11 @@ def peso_de(raiz=None):
 # por defecto "Descripcion" salia "Descripci¢n" y ninguna clave con tilde
 # casaba. Por eso _texto_oem lee esos bytes a mano, con cp850 y con
 # errors="replace" para que un byte raro se marque y nunca reviente.
-# El ENCENDIDO de wifi y de bluetooth necesita permisos de administrador
-# (medido: un proceso NO elevado no puede), y aqui NO se finge que apaga:
-# wifi() y bluetooth() se niegan SIEMPRE diciendo el motivo, sin mandar ni
-# un comando. Lo que SI se puede sin admin es LEER el estado, y eso va
-# encadenado aca abajo.
+# wifi() y bluetooth() ahora intentan DE VERDAD encender y apagar: netsh y
+# powershell respectivamente. Si el equipo no lo permite (por ejemplo, sin
+# permisos de administrador), devuelven ok=False con el error real del
+# comando, nunca con una negativa inventada. Lo que se puede sin admin es
+# LEER el estado, y eso va encadenado aca abajo.
 # DESCARGAS: urllib de la stdlib, con timeout (sin el, un servidor mudo
 # dejaria a main.py colgado). descargar SOLO crea un archivo NUEVO (nunca
 # sobrescribe) y lo deja completo en su nombre con os.replace.
@@ -1873,12 +1887,6 @@ _BUSQUEDA_GOOGLE = "https://www.google.com/search?q="
 # cuantos dispositivos bluetooth salen en la lista (medido: 10 en esta PC;
 # como en procesos, cientos de nombres no se pueden ni leer ni escuchar)
 _TOPE_BLUETOOTH = 5
-
-# lo unico que wifi() y bluetooth() pueden contestar hoy: el encendido y el
-# apagado de ambas radios exigen permisos de administrador, medido el
-# 2026-10-21 en esta PC (un proceso no elevado no puede)
-_SIN_PERMISOS = ("requiere permisos de administrador; "
-                 "ejecuta Jarvis elevado")
 
 
 def _texto_oem(salida):
@@ -1944,22 +1952,66 @@ def wifi_estado():
     return Resultado(ok=True, detalle="wifi: " + ", ".join(partes))
 
 
-def wifi(nombre_accion=""):
-    """NUNCA enciende ni apaga el wifi: se niega y dice por que. Inocua.
+def _nombre_interfaz_wifi():
+    """nombre real de la interfaz wifi, o "Wi-Fi" si no se puede leer
 
-    El encendido real es "netsh interface set interface ... admin=enable"
-    (o admin=disable) y MEDIDO el 2026-10-21: un proceso NO elevado
-    (IsUserAnAdmin = 0) no puede; Jarvis corre sin permisos de
-    administrador. Por eso aqui NUNCA se manda el netsh y NUNCA se anuncia
-    un cambio que no paso: el resultado es SIEMPRE ok=False con _SIN_PERMISOS.
-    El argumento (la intencion pedida: "apagar" o "encender") viaja sin
-    usarse por si un dia Jarvis corre elevado y esta funcion se implementa
-    de verdad; entonces habra que reclasificarla en DESTRUCTIVAS, porque
-    cortar la red tambien es algo que conviene confirmar. El valor por
-    defecto es para que un ejecutar() sin argumentos no caiga en un
-    TypeError: el motor nunca lanza excepciones.
+    Lee "netsh interface show interface" y se queda con la linea que mencione
+    wifi / wi-fi / inalambrico. Si no se encuentra ninguna, devuelve "Wi-Fi",
+    que es el nombre por defecto de Windows en ingles.
     """
-    return Resultado(ok=False, detalle=_SIN_PERMISOS)
+    try:
+        hecho = subprocess.run(
+            ["netsh", "interface", "show", "interface"], check=True,
+            capture_output=True)
+    except (_ERROR_SUBPROCESO, OSError):
+        return "Wi-Fi"
+    texto = _texto_oem(hecho)
+    for linea in texto.splitlines():
+        bajo = linea.lower()
+        if ("wi-fi" in bajo or "wifi" in bajo
+                or "inalambrico" in bajo or "inalámbrico" in bajo):
+            nombre = re.split(r"\s{2,}", linea.strip(), 1)[0]
+            if nombre:
+                return nombre
+    return "Wi-Fi"
+
+
+def wifi(nombre_accion=""):
+    """enciende o apaga el interfaz wifi con netsh. Inocua.
+
+    "encender" ejecuta "netsh interface set interface <nombre>
+    admin=enable" y "apagar" ejecuta lo mismo con admin=disable. El nombre
+    de la interfaz se lee de "netsh interface show interface" y, si no se
+    encuentra, se usa "Wi-Fi". Si netsh rechaza el comando (por ejemplo, sin
+    permisos de administrador), se devuelve ok=False con el error real de
+    netsh, nunca con una negativa inventada. Un argumento que no sea
+    "encender" ni "apagar" devuelve ok=False sin tocar nada.
+    """
+    nombre_accion = (nombre_accion or "").strip().lower()
+    if nombre_accion not in ("encender", "apagar"):
+        return Resultado(
+            ok=False,
+            detalle="falta la accion de wifi: uso 'encender' o 'apagar'")
+    estado = "enable" if nombre_accion == "encender" else "disable"
+    nombre = _nombre_interfaz_wifi()
+    comando = ["netsh", "interface", "set", "interface", nombre,
+               "admin=" + estado]
+    try:
+        subprocess.run(comando, check=True, capture_output=True)
+    except _ERROR_SUBPROCESO as error:
+        crudo = getattr(error, "stderr", None) or getattr(error, "output", None)
+        if isinstance(crudo, bytes):
+            detalle = crudo.decode(_CODIGO_CONSOLA, errors="replace").strip()
+        elif crudo:
+            detalle = str(crudo).strip()
+        else:
+            detalle = str(error)
+        return Resultado(ok=False, detalle="netsh rechazo el wifi: " + detalle)
+    except OSError as error:
+        return Resultado(
+            ok=False, detalle="no pude correr netsh para el wifi: %s"
+            % (error,))
+    return Resultado(ok=True, detalle="wifi %s (%s)" % (nombre_accion, nombre))
 
 
 # CSV de powershell (medido el 2026-10-21 en esta PC: 10 dispositivos). La
@@ -2019,14 +2071,69 @@ def bluetooth_estado():
 
 
 def bluetooth(nombre_accion=""):
-    """NUNCA enciende ni apaga el bluetooth: se niega y dice por que. Inocua.
+    """enciende o apaga un dispositivo bluetooth con powershell. Inocua.
 
-    Mismo criterio medido que wifi: Enable-PnpDevice y Disable-PnpDevice
-    exigen permisos de administrador, y aqui NO se finge el cambio ni se
-    toca el dispositivo. El resultado es SIEMPRE ok=False con _SIN_PERMISOS,
-    aunque la accion llegue sin argumentos (el motor nunca lanza).
+    Busca dispositivos con "Get-PnpDevice -Class Bluetooth". "encender"
+    ejecuta "Enable-PnpDevice -InstanceId '<id>' -Confirm:$false" y
+    "apagar" ejecuta "Disable-PnpDevice -InstanceId '<id>' -Confirm:$false"
+    sobre el primero que encuentre. Si powershell rechaza el comando (por
+    ejemplo, sin permisos de administrador), se devuelve ok=False con el
+    error real, nunca con una negativa inventada. Un argumento que no sea
+    "encender" ni "apagar" devuelve ok=False sin tocar nada.
     """
-    return Resultado(ok=False, detalle=_SIN_PERMISOS)
+    nombre_accion = (nombre_accion or "").strip().lower()
+    if nombre_accion not in ("encender", "apagar"):
+        return Resultado(
+            ok=False,
+            detalle="falta la accion de bluetooth: uso 'encender' o 'apagar'")
+    verbo = ("Enable-PnpDevice" if nombre_accion == "encender"
+             else "Disable-PnpDevice")
+    # buscar el primer dispositivo bluetooth y su id de instancia
+    script = ("Get-PnpDevice -Class Bluetooth | Select-Object -First 1 "
+              "InstanceId | ConvertTo-Csv -NoTypeInformation")
+    comando = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               script]
+    try:
+        hecho = subprocess.run(comando, check=True, capture_output=True)
+    except _ERROR_SUBPROCESO:
+        return Resultado(
+            ok=False, detalle="powershell no quiso listar el bluetooth")
+    except OSError as error:
+        return Resultado(
+            ok=False, detalle="no pude correr powershell: %s" % (error,))
+    filas = [fila for fila in csv.reader(_texto_oem(hecho).splitlines())
+             if fila and fila[0].strip()]
+    if filas and filas[0][0].strip().lower() == "instanceid":
+        filas = filas[1:]
+    if not filas or len(filas[0]) < 1 or not filas[0][0].strip():
+        return Resultado(
+            ok=False, detalle="no encontre ningun dispositivo bluetooth")
+    instance_id = filas[0][0].strip()
+    script_ado = ("%s -InstanceId '%s' -Confirm:$false"
+                  % (verbo, instance_id))
+    comando_ado = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   script_ado]
+    try:
+        subprocess.run(comando_ado, check=True, capture_output=True)
+    except _ERROR_SUBPROCESO as error:
+        crudo = getattr(error, "stderr", None) or getattr(error, "output", None)
+        if isinstance(crudo, bytes):
+            detalle = crudo.decode(_CODIGO_CONSOLA, errors="replace").strip()
+        elif crudo:
+            detalle = str(crudo).strip()
+        else:
+            detalle = str(error)
+        return Resultado(
+            ok=False,
+            detalle="powershell rechazo %s del bluetooth: %s"
+            % (nombre_accion, detalle))
+    except OSError as error:
+        return Resultado(
+            ok=False,
+            detalle="no pude correr powershell para el bluetooth: %s"
+            % (error,))
+    return Resultado(ok=True, detalle="bluetooth %s: %s"
+                     % (nombre_accion, instance_id))
 
 
 def _leer_http(url):
@@ -2067,20 +2174,22 @@ def _nombre_de_url(url):
     return nombre or None
 
 
-def descargar(url, destino="descargas"):
+def descargar(url, destino=None):
     """descarga `url` a un archivo NUEVO dentro de `destino`. Inocua.
 
-    `destino` es una CARPETA (el alias de _RAICES_BUSQUEDA o una ruta
-    entera, como abrir_archivo) y el nombre del archivo lo da la propia
-    url (_nombre_de_url). SOLO crea un archivo NUEVO: si ya existe uno con
-    ese nombre NO se sobrescribe (ok=False con su motivo), porque pisar
-    datos de Edward no es "descargar". El contenido baja en trozos de
-    _TROZO_DESCARGA a un ".parte" y recien cuando esta COMPLETO pasa al
-    nombre definitivo con os.replace (escritura atomica, fundamento 25): una
-    descarga cortada no deja un archivo final a medias. Si algo falla a
-    medio camino, el ".parte" se limpia (es un archivo que creo ESTA
-    llamada, no datos de nadie). Sin red o con error del servidor ->
-    ok=False, sin reventar. NUNCA lanza excepciones.
+    `destino` es una CARPETA (cualquier ruta absoluta, relativa o con ~, o
+    el alias Escritorio/Documentos/Descargas, como abrir_archivo) y el
+    nombre del archivo lo da la propia
+    url (_nombre_de_url). Sin `destino` se usa el DIRECTORIO DE USUARIO
+    COMPLETO (~), no solo una carpeta acotada. SOLO crea un archivo NUEVO:
+    si ya existe uno con ese nombre NO se sobrescribe (ok=False con su
+    motivo), porque pisar datos de Edward no es "descargar". El contenido
+    baja en trozos de _TROZO_DESCARGA a un ".parte" y recien cuando esta
+    COMPLETO pasa al nombre definitivo con os.replace (escritura atomica,
+    fundamento 25): una descarga cortada no deja un archivo final a medias.
+    Si algo falla a medio camino, el ".parte" se limpia (es un archivo que
+    creo ESTA llamada, no datos de nadie). Sin red o con error del servidor
+    -> ok=False, sin reventar. NUNCA lanza excepciones.
     """
     if not isinstance(url, str) or not url.strip():
         return Resultado(ok=False, detalle="falta la url a descargar")
@@ -2088,10 +2197,13 @@ def descargar(url, destino="descargas"):
     if nombre is None:
         return Resultado(
             ok=False, detalle="la url no trae nombre de archivo: " + url.strip())
-    carpeta = _ruta_de_raiz(destino)
-    if carpeta is None:
-        return Resultado(
-            ok=False, detalle="falta la carpeta donde guardar la descarga")
+    if destino is None:
+        carpeta = os.path.expanduser("~")
+    else:
+        carpeta = _ruta_de_raiz(destino)
+        if carpeta is None:
+            return Resultado(
+                ok=False, detalle="falta la carpeta donde guardar la descarga")
     ruta = os.path.join(carpeta, nombre)
     if os.path.exists(ruta):
         return Resultado(

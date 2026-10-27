@@ -65,7 +65,8 @@ from main import motor
 from main.reconocedor import Accion, interpretar
 
 # las 9 acciones de esta fase, TODAS clasificadas: o SOLO LEEN (el equipo, la
-# red o la papelera), o se niegan sin tocar nada, o borran con confirmacion
+# red o la papelera), o intentan ejecutar de verdad (wifi, bluetooth), o
+# borran con confirmacion
 ACCIONES_NUEVAS = (
     "wifi_estado",
     "wifi",
@@ -77,13 +78,6 @@ ACCIONES_NUEVAS = (
     "papelera_ver",
     "borrar_archivo",
 )
-
-# de ellas, estas DOS se niegan SIEMPRE: nunca encienden ni apagan nada
-INTERRUPTORES = ("wifi", "bluetooth")
-
-# lo unico que los interruptores pueden contestar (motor._SIN_PERMISOS,
-# escrito a mano aqui para que un cambio de redaccion lo delate)
-_SIN_PERMISOS = "requiere permisos de administrador; ejecuta Jarvis elevado"
 
 # urls de las pruebas de red: la misma tabla se alimenta los dobles y las
 # muestras, para que ninguna prueba se quede sin respuesta
@@ -143,6 +137,8 @@ def _doblado():
     dobles["ctypes"].byref.side_effect = lambda objeto: objeto
     dobles["os"].path.join.side_effect = \
         lambda *partes: "\\".join(str(parte) for parte in partes)
+    dobles["os"].path.normpath.side_effect = lambda texto: texto
+    dobles["os"].path.expanduser.side_effect = lambda texto: texto
     with contextlib.ExitStack() as pila:
         for nombre, doble in dobles.items():
             pila.enter_context(mock.patch.object(motor, nombre, doble))
@@ -279,18 +275,17 @@ class TestLasNueveClasificadas(unittest.TestCase):
                 "para una lectura" % (nombre,))
 
     def test_las_inocuas_ejecutan_sin_confirmacion_ni_reventar(self):
-        """las 6 con final feliz van por ejecutar() con confirmado=False
+        """las 7 con final feliz van por ejecutar() con confirmado=False
 
-        Los interruptores (wifi, bluetooth) quedan FUERA: su final es
-        siempre ok=False y eso se prueba aparte, en TestInterruptores.
-        borrar_archivo tampoco entra: es DESTRUCTIVA y su freno se prueba
+        wifi y bluetooth ya NO se niegan: intentan ejecutar netsh /
+        powershell y, con los dobles que simulan exito, devuelven ok=True.
+        borrar_archivo no entra: es DESTRUCTIVA y su freno se prueba
         en TestBorrarArchivo. Todo ocurre con los dobles puestos.
         """
         con_final_feliz = [nombre for nombre in ACCIONES_NUEVAS
-                           if nombre not in INTERRUPTORES
-                           and nombre != "borrar_archivo"]
+                           if nombre != "borrar_archivo"]
         self.assertEqual(
-            len(con_final_feliz), 6,
+            len(con_final_feliz), 8,
             "las acciones con final feliz cambiaron: %r" % (con_final_feliz,))
         with tempfile.TemporaryDirectory() as tempdir:
             muestras = dict(_MUESTRAS, descargar=(URL_DESCARGA, tempdir))
@@ -318,7 +313,7 @@ class TestLasNueveClasificadas(unittest.TestCase):
 
             urlopen.assert_called()
         self.assertTrue(_sucias(dobles),
-                        "ninguna de las 6 toco siquiera a los dobles")
+                        "ninguna de las 8 toco siquiera a los dobles")
 
 
 # argumentos de MUESTRA de cada accion: sin ellos, una accion CON argumentos
@@ -412,41 +407,93 @@ class TestWifiEstado(unittest.TestCase):
         self.assertNotIn("hospedada", resultado.detalle)
 
 
-class TestInterruptores(unittest.TestCase):
-    """wifi() y bluetooth() SIEMPRE se niegan: nunca se anuncia un cambio"""
+class TestWifiYBluetoothIntentanEjecutar(unittest.TestCase):
+    """wifi() y bluetooth() ya NO se niegan: intentan ejecutar de verdad
+    (netsh / powershell) y devuelven el error real si fallan, nunca una
+    negativa inventada."""
 
-    def test_se_niegan_sin_tocar_absolutamente_nada(self):
-        """ni netsh, ni powershell, ni os, ni ctypes, ni navegador: cero
+    def test_wifi_llama_a_netsh_con_admin(self):
+        """wifi('encender') -> netsh ... admin=enable; wifi('apagar') ->
+        netsh ... admin=disable"""
+        for intencion, estado in (("encender", "enable"),
+                                  ("apagar", "disable")):
+            with _doblado() as dobles, self.subTest(intencion=intencion):
+                _subprocess_falso(dobles, {"netsh": _SALIDA_NETSH})
+                resultado = motor.ejecutar(Accion("wifi", (intencion,)))
 
-        Es la segunda mitad de la trampa del apagado de wifi: no basta con
-        devolver ok=False, hay que probar que NINGUN sistema fue llamado.
-        """
-        for nombre in INTERRUPTORES:
-            for intencion in ("apagar", "encender"):
-                with _doblado() as dobles, \
-                        self.subTest(nombre=nombre, intencion=intencion):
-                    resultado = motor.ejecutar(
-                        Accion(nombre, (intencion,)))
-                    self.assertFalse(
-                        resultado.ok,
-                        "%r dijo ok=True siendo incapaz de tocar la radio"
-                        % (nombre,))
-                    self.assertEqual(
-                        resultado.detalle, _SIN_PERMISOS,
-                        "%r cambio el mensaje de los permisos: %r"
-                        % (nombre, resultado.detalle))
-                    self.assertEqual(
-                        _sucias(dobles), {},
-                        "%r (%s) toco estos sistemas sin permisos: %r"
-                        % (nombre, intencion, _sucias(dobles)))
+            self.assertTrue(resultado.ok, resultado.detalle)
+            comando = dobles["subprocess"].run.call_args.args[0]
+            self.assertEqual(comando[0], "netsh")
+            self.assertIn("admin=" + estado, comando)
+            self.assertIn("interface", comando)
 
-    def test_sin_argumentos_tambien_se_niegan(self):
-        """ejecutar() puede llegar sin argumentos: nunca TypeError"""
-        for nombre in INTERRUPTORES:
+    def test_bluetooth_llama_a_powershell_con_enable_disable(self):
+        """bluetooth('encender') y ('apagar') llaman a powershell dos veces:
+        listar dispositivos y luego Enable/Disable-PnpDevice"""
+        for intencion, verbo in (("encender", "Enable-PnpDevice"),
+                                 ("apagar", "Disable-PnpDevice")):
+            with _doblado() as dobles, self.subTest(intencion=intencion):
+                _subprocess_falso(
+                    dobles,
+                    {"powershell": b'"InstanceId"\r\n"USB\\VID_0001"\r\n'})
+                resultado = motor.ejecutar(Accion("bluetooth", (intencion,)))
+
+            self.assertTrue(resultado.ok, resultado.detalle)
+            llamadas = [llamada.args[0] for llamada
+                        in dobles["subprocess"].run.call_args_list]
+            self.assertTrue(
+                any("powershell" in c and verbo in " ".join(c)
+                    for c in llamadas),
+                "no se llamo a %s: %r" % (verbo, llamadas))
+
+    def test_sin_argumento_devuelve_error_real_no_permisos(self):
+        """sin argumento, wifi y bluetooth devuelven error real
+        ('falta la accion...'), nunca _SIN_PERMISOS"""
+        for nombre in ("wifi", "bluetooth"):
             with _doblado(), self.subTest(nombre=nombre):
                 resultado = motor.ejecutar(Accion(nombre))
-                self.assertFalse(resultado.ok, resultado.detalle)
-                self.assertEqual(resultado.detalle, _SIN_PERMISOS)
+            self.assertFalse(resultado.ok, resultado.detalle)
+            self.assertIn("falta la accion", resultado.detalle)
+
+    def test_argumento_invalido_devuelve_error_real(self):
+        """un argumento que no es 'encender' ni 'apagar' devuelve error
+        real sin tocar nada"""
+        for nombre in ("wifi", "bluetooth"):
+            with _doblado(), self.subTest(nombre=nombre):
+                resultado = motor.ejecutar(Accion(nombre, ("reiniciar",)))
+            self.assertFalse(resultado.ok, resultado.detalle)
+            self.assertIn("falta la accion", resultado.detalle)
+
+    def test_cuando_netsh_falla_devuelve_ok_false_con_error_real(self):
+        """netsh rechaza el comando -> ok=False con el error real, no con
+        una negativa inventada"""
+        with _doblado() as dobles:
+            dobles["subprocess"].run.side_effect = \
+                motor._ERROR_SUBPROCESO(1, ["netsh"])
+            resultado = motor.ejecutar(Accion("wifi", ("encender",)))
+        self.assertFalse(resultado.ok, resultado.detalle)
+        self.assertIn("rechazo", resultado.detalle)
+
+    def test_cuando_powershell_falla_devuelve_ok_false_con_error_real(self):
+        """la segunda llamada de powershell (habilitar/deshabilitar) rechaza
+        el comando -> ok=False con el error real"""
+        with _doblado() as dobles:
+            llamadas = {"n": 0}
+            def _corre(comando, **_argumentos):
+                llamadas["n"] += 1
+                respuesta = mock.MagicMock(name="salida_falsa")
+                respuesta.returncode = 0
+                if llamadas["n"] == 1:
+                    # primera llamada: listar dispositivos, OK
+                    respuesta.stdout = b'"InstanceId"\r\n"USB\\VID_0001"\r\n'
+                else:
+                    # segunda llamada: Enable/Disable, falla
+                    raise motor._ERROR_SUBPROCESO(1, comando)
+                return respuesta
+            dobles["subprocess"].run.side_effect = _corre
+            resultado = motor.ejecutar(Accion("bluetooth", ("encender",)))
+        self.assertFalse(resultado.ok, resultado.detalle)
+        self.assertIn("rechazo", resultado.detalle)
 
 
 class TestBluetoothEstado(unittest.TestCase):
@@ -612,12 +659,10 @@ class TestDescargar(unittest.TestCase):
                 self.assertFalse(resultado.ok, resultado.detalle)
                 dobles["subprocess"].run.assert_not_called()
 
-    def test_por_defecto_se_va_a_descargas(self):
-        """sin carpeta en la frase, el MOTOR pone su alias de siempre"""
+    def test_por_defecto_se_va_al_directorio_de_usuario(self):
+        """sin carpeta en la frase, el MOTOR usa ~ (directorio de usuario
+        completo), no solo la carpeta Descargas"""
         with tempfile.TemporaryDirectory() as tempdir:
-            # la carpeta Descargas TIENE que existir: el archivo se abre de
-            # verdad (solo el os del motor viene doblado)
-            os.makedirs(os.path.join(tempdir, "Downloads"))
             with _doblado() as dobles:
                 dobles["os"].path.expanduser.side_effect = \
                     lambda texto: tempdir
@@ -629,8 +674,8 @@ class TestDescargar(unittest.TestCase):
             self.assertTrue(resultado.ok, resultado.detalle)
             self.assertEqual(
                 dobles["os"].path.join.call_args.args,
-                (os.path.join(tempdir, "Downloads"), "foto.png"),
-                "por defecto no se fue a la carpeta Descargas")
+                (tempdir, "foto.png"),
+                "por defecto no se fue al directorio de usuario")
 
 
 class TestLeerJson(unittest.TestCase):

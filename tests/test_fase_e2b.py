@@ -66,6 +66,8 @@ def _doblado():
     dobles["os"].path.expandvars.side_effect = lambda texto: texto
     dobles["os"].path.join.side_effect = \
         lambda *partes: "\\".join(str(parte) for parte in partes)
+    dobles["os"].path.normpath.side_effect = lambda texto: texto
+    dobles["os"].path.expanduser.side_effect = lambda texto: texto
     with contextlib.ExitStack() as pila:
         for nombre, doble in dobles.items():
             pila.enter_context(mock.patch.object(motor, nombre, doble))
@@ -148,7 +150,8 @@ class TestAbrirArchivos(unittest.TestCase):
     def test_el_alias_de_la_carpeta_se_resuelve_a_su_ruta(self):
         """"escritorio" (lo que dice el reconocedor) abre el Desktop real"""
         with _doblado() as dobles:
-            dobles["os"].path.expanduser.return_value = r"C:\Users\PRGRAMADOR"
+            dobles["os"].path.expanduser.side_effect = \
+                lambda texto: r"C:\Users\PRGRAMADOR" if texto == "~" else texto
             dobles["os"].path.exists.return_value = True
             resultado = motor.ejecutar(Accion("abrir_archivo", ("escritorio",)))
 
@@ -358,21 +361,15 @@ class TestCerrarApp(unittest.TestCase):
 
 
 class TestBuscarArchivo(unittest.TestCase):
-    """buscar_archivo: solo LEE, acotado por defecto y sin reventar"""
+    """buscar_archivo: solo LEE, raiz por defecto el directorio de usuario y
+    sin reventar"""
 
-    # lo que mide esta clase: las 3 carpetas por defecto, que es el tope que
-    # evita recorrer C:\ (medido: ~59 s, y ~2 min midiendo tamaños)
-    RAICES_POR_DEFECTO = [
-        r"C:\Users\PRGRAMADOR\Desktop",
-        r"C:\Users\PRGRAMADOR\Documents",
-        r"C:\Users\PRGRAMADOR\Downloads",
-    ]
-
-    def test_por_defecto_solo_recorre_las_tres_carpetas(self):
-        """raiz=None -> Escritorio, Documentos y Descargas: NUNCA la raiz del
-        disco (C:), que tarda ~59 s en recorrerse (medido)"""
+    def test_por_defecto_recorre_el_directorio_de_usuario(self):
+        """raiz=None -> ~ (directorio de usuario completo), NUNCA solo 3
+        carpetas. El limite de las 3 carpetas se elimino."""
         with _doblado() as dobles:
-            dobles["os"].path.expanduser.return_value = r"C:\Users\PRGRAMADOR"
+            dobles["os"].path.expanduser.side_effect = \
+                lambda texto: r"C:\Users\Edward" if texto == "~" else texto
             dobles["os"].walk.side_effect = \
                 lambda raiz, onerror=None: iter(
                     [(raiz, [], ["factura_2026.pdf", "otro.txt"])])
@@ -382,10 +379,9 @@ class TestBuscarArchivo(unittest.TestCase):
         raizes = [llamada.args[0]
                   for llamada in dobles["os"].walk.call_args_list]
         self.assertEqual(
-            raizes, self.RAICES_POR_DEFECTO,
-            "la busqueda por defecto salio de las carpetas permitidas: %s"
+            raizes, [r"C:\Users\Edward"],
+            "por defecto busca en ~ (usuario), no solo 3 carpetas: %s"
             % (raizes,))
-        # onerror siempre puesto: una carpeta sin permisos se SALTA
         for llamada in dobles["os"].walk.call_args_list:
             self.assertIn("onerror", llamada.kwargs,
                           "os.walk sin onerror reventaria con PermissionError")
@@ -418,7 +414,8 @@ class TestBuscarArchivo(unittest.TestCase):
     def test_raiz_valida_se_resuelve_y_se_usa(self):
         """el alias "documentos" (lo que dice el reconocedor) se usa tal cual"""
         with _doblado() as dobles:
-            dobles["os"].path.expanduser.return_value = r"C:\Users\PRGRAMADOR"
+            dobles["os"].path.expanduser.side_effect = \
+                lambda texto: r"C:\Users\PRGRAMADOR" if texto == "~" else texto
             dobles["os"].path.isdir.return_value = True
             dobles["os"].walk.side_effect = \
                 lambda raiz, onerror=None: iter([(raiz, [], ["factura.pdf"])])

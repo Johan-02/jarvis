@@ -164,28 +164,18 @@ G3) y hace que el modo offline no dependa de red ni de clave.
 
 ## ⚠️ Límites honestos (medidos, no inventados)
 
-- **Encender o apagar WiFi y Bluetooth no se puede**: exige permisos de
-  administrador (medido con `IsUserAnAdmin = 0`). Las acciones `wifi` y
-  `bluetooth` existen pero SIEMPRE devuelven `ok=False` diciendolo; nunca
-  fingen que lo apagaron. Lo que SI se puede es LEER el estado
-  (`wifi_estado`, `bluetooth_estado`).
-- **`brillo` solo funciona en pantallas que lo soportan**: en un monitor
-  externo la clase WMI (`WmiMonitorBrightnessMethods`) viene vacia y la accion
-  devuelve `ok=False` con su motivo.
 - **`escribir_texto` usa portapapeles + Ctrl+V a proposito**:
   `pyautogui.write` descarta en silencio `á é í ó ú ñ ¿` y mutilaria el texto
   de voz.
 - **`mandar_teclas` NO se probo inyectando teclas reales**: inyectar escribiria
   en lo que el usuario tenga enfrente. Lo comprobado es la estructura del
   paquete que sale (medida con ctypes), no el teclado fisico.
-- **`buscar_archivo` y `peso_de` estan acotados** a Escritorio/Documentos/
-  Descargas por defecto: recorrer `C:\` entero tardo ~59 s medido.
 - **`procesos` limita la salida** a 40 lineas.
 - **`papelera_vaciar` y `borrar_archivo` nunca se probaron en vivo.**
 - **Sin `GROQ_API_KEY` válida, Jarvis sigue siendo útil**: cae a **27 de
   las 41 acciones por palabras clave**, **sin llamar a la IA en ningún
   punto**; lo que no sea una orden conocida va a `consultar_ia`, y ahí SÍ
-  necesita la clave. Las otras 14 acciones solo las alcanza la IA: `abrir_url`,
+  necesita la clave. Las otras 14 acciones solo las alcanzan la IA: `abrir_url`,
   `abrir_web`, `bateria`, `borrar_archivo`, `brillo`, `descargar`,
   `escribir_texto`, `leer_memoria`, `mirar_pantalla`, `mover_raton`, `olvidar`,
   `peso_de`, `recordar` y `volumen_leer`. El motor de acciones NO necesita la

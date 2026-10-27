@@ -124,9 +124,8 @@ ORDENES = (
 
     # --- FASE E2e, GRUPO 5: red y descargas, mas papelera y borrado. Los
     #     interruptores de wifi y de bluetooth viajan con su INTENCION como
-    #     argumento ("apagar"/"encender"): hoy el motor se niega a ejecutarlos
-    #     (necesitan permisos de administrador, medido), y ese argumento
-    #     queda por si un dia se implementan de verdad. "vacia la papelera"
+    #     argumento ("apagar"/"encender"): el motor los ejecuta de verdad con
+    #     netsh / powershell y devuelve su error real si falla. "vacia la papelera"
     #     es destructiva y el freno de la confirmacion vive en el MOTOR ---
     ("como esta el wifi", Accion("wifi_estado", ())),
     ("estado del wifi", Accion("wifi_estado", ())),

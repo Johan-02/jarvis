@@ -104,6 +104,7 @@ def _doblado():
     dobles["os"].path.join.side_effect = \
         lambda *partes: "\\".join(str(parte) for parte in partes)
     dobles["os"].path.expanduser.side_effect = lambda texto: texto
+    dobles["os"].path.normpath.side_effect = lambda texto: texto
     dobles["ctypes"].byref.side_effect = lambda objeto: objeto
     with contextlib.ExitStack() as pila:
         for nombre, doble in dobles.items():
@@ -880,7 +881,7 @@ class TestPesoDe(unittest.TestCase):
         """'documentos' -> ~\\Documents, el MISMO vocabulario que el motor"""
         with _doblado() as dobles:
             dobles["os"].path.expanduser.side_effect = \
-                lambda texto: r"C:\Users\Edward"
+                lambda texto: r"C:\Users\Edward" if texto == "~" else texto
             dobles["os"].path.isdir.return_value = True
             dobles["os"].walk.side_effect = \
                 lambda raiz, onerror=None: iter([])
@@ -892,9 +893,9 @@ class TestPesoDe(unittest.TestCase):
             r"C:\Users\Edward\Documents",
             "el alias documentos no se resolvio a su carpeta real")
 
-    def test_sin_raiz_recorre_las_tres_carpetas_acotadas(self):
-        """NUNCA C:\\ entero: son ~59 s medidos; las tres raices por
-        defecto son Escritorio, Documentos y Descargas"""
+    def test_sin_raiz_recorre_el_directorio_de_usuario(self):
+        """raiz=None -> ~ (directorio de usuario completo), no solo 3
+        carpetas. El limite de las 3 carpetas se elimino."""
         with _doblado() as dobles:
             dobles["os"].path.expanduser.side_effect = \
                 lambda texto: r"C:\Users\Edward"
@@ -906,9 +907,9 @@ class TestPesoDe(unittest.TestCase):
                       for llamada in dobles["os"].walk.call_args_list]
         self.assertEqual(
             recorridas,
-            [r"C:\Users\Edward\Desktop", r"C:\Users\Edward\Documents",
-             r"C:\Users\Edward\Downloads"],
-            "las raices por defecto cambiaron: %r" % (recorridas,))
+            [r"C:\Users\Edward"],
+            "por defecto recorre ~ (usuario), no solo 3 carpetas: %r"
+            % (recorridas,))
 
     def test_suma_los_tamanios_y_los_entrega_en_gb(self):
         with _doblado() as dobles:
