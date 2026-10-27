@@ -30,6 +30,11 @@ from main.reconocedor import interpretar, SIGNOS, Accion
 from main import motor
 from main import herramientas # generador de herramientas para la API (FASE G1)
 from main import cerebro # el traductor al proveedor de IA (Groq)
+from main.interfaz_voz import InterfazVoz # ventana de ondas al hablar/escuchar
+
+# instancia global de la interfaz de voz (se crea sin abrir ventana;
+# la ventana solo aparece al llamar a iniciar())
+interfaz_voz = InterfazVoz()
 
 
 # definimos el nombre del asistente
@@ -256,6 +261,7 @@ def hablar(texto):
         await comunicador.save(nombre_archivo)
 
     try:
+        interfaz_voz.iniciar()
         asyncio.run(generar_voz())
         playsound(nombre_archivo)
     except Exception as error:
@@ -283,6 +289,7 @@ def hablar(texto):
                 os.remove(nombre_archivo)
         except OSError:
             print("aviso: no se pudo borrar el mp3 de voz %s" % nombre_archivo)
+        interfaz_voz.detener()
 
 # ---------------------------------------------------------------------------
 # CALIBRACION DEL SILENCIO Y AMPLIFICACION ANTES DE TRANSCRIBIR
@@ -1537,6 +1544,7 @@ def procesar_orden():
     limpiar_historial()
     while True:
         print("Escuchando...")
+        interfaz_voz.iniciar()
         audio = grabar_hasta_silencio(frecuencia)
         # el wav se escribe AMPLIFICADO (ver _audio_mas_fuerte): con el
         # volumen bajo del microfono de Edward Google adivinaba ("Juana" por
@@ -1568,12 +1576,14 @@ def procesar_orden():
             # ejecuta igual: el wav se borra antes de volver a escuchar.
             print("aviso: sin internet no puedo reconocer ni hablar (%s); "
                   "reintenta" % type(error).__name__)
+            interfaz_voz.detener()
             continue
         finally:
             # el wav se borra SIEMPRE apenas se lee, tambien si el
             # reconocimiento revienta (sin internet, voz ilegible)
             _borrar_wav(ruta_wav)
 
+        interfaz_voz.detener()
         texto = texto.lower()
 
         # FASE E2a: si hay una accion esperando confirmacion, la frase de
