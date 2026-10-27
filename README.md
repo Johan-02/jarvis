@@ -27,7 +27,7 @@ instalar nada.
 
 ```bash
 python main/main.py                   # pide el microfono y se queda escuchando
-python -m unittest discover -s tests  # corre la suite: hoy 358 pruebas
+python -m unittest discover -s tests  # corre la suite: hoy 362 pruebas
 ```
 
 Al arrancar, si `memoria.json` aun no tiene nombre, Jarvis lo pregunta una vez
@@ -164,12 +164,22 @@ G3) y hace que el modo offline no dependa de red ni de clave.
 
 ## ⚠️ Límites honestos (medidos, no inventados)
 
+- **WiFi y Bluetooth sí se encienden y apagan de verdad**: `wifi` y
+  `bluetooth` mandan comandos reales a Windows (`netsh` para WiFi,
+  `Enable-PnpDevice`/`Disable-PnpDevice` para Bluetooth). Si el equipo no
+  tiene permisos de administrador, devuelven `ok=False` con el error real,
+  nunca fingen que lo hicieron.
+- **`brillo` funciona en pantallas internas**: usa WMI
+  (`WmiMonitorBrightnessMethods`) por powershell. En monitores externos la
+  clase WMI viene vacía y devuelve `ok=False` con su motivo.
 - **`escribir_texto` usa portapapeles + Ctrl+V a proposito**:
   `pyautogui.write` descarta en silencio `á é í ó ú ñ ¿` y mutilaria el texto
   de voz.
 - **`mandar_teclas` NO se probo inyectando teclas reales**: inyectar escribiria
   en lo que el usuario tenga enfrente. Lo comprobado es la estructura del
   paquete que sale (medida con ctypes), no el teclado fisico.
+- **`buscar_archivo`, `descargar` y `peso_de` aceptan cualquier carpeta**:
+  buscan o guardan donde el usuario diga, sin limitarse a tres carpetas.
 - **`procesos` limita la salida** a 40 lineas.
 - **`papelera_vaciar` y `borrar_archivo` nunca se probaron en vivo.**
 - **Sin `GROQ_API_KEY` válida, Jarvis sigue siendo útil**: cae a **27 de
@@ -187,7 +197,7 @@ G3) y hace que el modo offline no dependa de red ni de clave.
 python -m unittest discover -s tests
 ```
 
-Hoy son **358 pruebas**. No abren microfono ni hablan: leen el codigo como
+Hoy son **362 pruebas**. No abren microfono ni hablan: leen el codigo como
 texto o como AST, y las del motor usan dobles en vez de tocar el equipo real.
 
 ## 📁 Estructura
@@ -200,7 +210,7 @@ jarvis/
 │                       catalogos), reconocedor.py (texto -> acciones),
 │                       cerebro.py (traduce al formato de Groq) y
 │                       main/.env
-├── tests/            ← las 358 pruebas (unittest)
+├── tests/            ← las 362 pruebas (unittest)
 ├── requirements.txt  ← dependencias reales del proyecto
 ├── .env.example      ← plantilla de la unica variable de entorno
 ├── memoria.json      ← memoria del asistente (nombre y notas)
